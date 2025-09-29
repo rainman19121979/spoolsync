@@ -3,3 +3,4 @@ uvicorn[standard]
 apscheduler
 httpx
 jinja2
+python-multipart
