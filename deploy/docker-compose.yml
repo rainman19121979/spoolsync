@@ -1,0 +1,16 @@
+version: "3.9"
+services:
+  spoolsync:
+    image: ghcr.io/DEINUSER/spoolsync:latest
+    container_name: spoolsync
+    restart: unless-stopped
+    environment:
+      DB_PATH: /data/spoolsync.db
+      TZ: ${TZ:-Europe/Berlin}
+      PORT: ${PORT:-8080}
+    volumes:
+      - spoolsync_data:/data
+    ports:
+      - "${PORT:-8080}:8080"
+volumes:
+  spoolsync_data:
