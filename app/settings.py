@@ -3,13 +3,15 @@ DB_PATH = os.getenv("DB_PATH","/var/lib/spoolsync/spoolsync.db")
 
 DEFAULTS = {
   "SPOOLMAN_BASE": "http://127.0.0.1:7912/api/v1",
-  "SP_BASE": "https://api.simplyprint.io/v1",
+  "SP_BASE": "https://api.simplyprint.io",
+  "SP_COMPANY_ID": "",  # Muss vom Benutzer gesetzt werden
   "SYNC_INTERVAL_SECONDS": "300",
   "EPSILON_GRAMS": "0.5",
   "DRY_RUN": "false",
 }
 
 def now(): return dt.datetime.utcnow().isoformat()
+
 def _conn():
     c = sqlite3.connect(DB_PATH)
     c.row_factory = sqlite3.Row

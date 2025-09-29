@@ -1,29 +1,185 @@
-<!doctype html><meta charset="utf-8">
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SpoolSync – Einstellungen</title>
 <style>
- body{font-family:sans-serif;max-width:720px;margin:20px auto;padding:1rem}
- label{display:block;margin:.4rem 0 .2rem}
- input[type=text],input[type=number],input[type=password]{width:100%;padding:.4rem}
- .btn{display:inline-block;padding:.5rem .8rem;border:1px solid #444;border-radius:8px;text-decoration:none}
+ body{font-family:sans-serif;max-width:800px;margin:20px auto;padding:1rem;background:#f5f5f5}
+ .container{background:white;padding:2rem;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}
+ h1{color:#333;margin-top:0}
+ .success{color:#0a0;background:#e8f5e9;padding:1rem;border-radius:4px;margin-bottom:1rem}
+ .warning{color:#f57c00;background:#fff3e0;padding:1rem;border-radius:4px;margin-bottom:1rem}
+ .section{margin-bottom:2rem;padding-bottom:1rem;border-bottom:1px solid #eee}
+ .section:last-child{border-bottom:none}
+ h2{color:#666;font-size:1.2rem;margin-bottom:1rem}
+ label{display:block;margin:.8rem 0 .3rem;font-weight:500;color:#555}
+ .hint{font-size:0.9rem;color:#888;margin-top:0.2rem}
+ input[type=text],input[type=number],input[type=password]{width:100%;padding:.6rem;border:1px solid #ddd;border-radius:4px;box-sizing:border-box}
+ input[type=text]:focus,input[type=number]:focus,input[type=password]:focus{outline:none;border-color:#4CAF50}
+ .checkbox-wrapper{display:flex;align-items:center;gap:0.5rem;margin:1rem 0}
+ .checkbox-wrapper input[type=checkbox]{width:auto;margin:0}
+ .btn{display:inline-block;padding:.6rem 1.2rem;border:none;border-radius:4px;text-decoration:none;cursor:pointer;font-size:1rem}
+ .btn-primary{background:#4CAF50;color:white}
+ .btn-primary:hover{background:#45a049}
+ .btn-secondary{background:#2196F3;color:white;margin-left:0.5rem}
+ .btn-secondary:hover{background:#0b7dda}
+ .btn-link{background:none;color:#2196F3;border:1px solid #2196F3}
+ .btn-link:hover{background:#e3f2fd}
+ .button-group{margin-top:1.5rem;display:flex;gap:0.5rem}
+ #testResult{margin-top:1rem;padding:1rem;border-radius:4px;display:none}
+ #testResult.success{display:block;background:#e8f5e9;color:#2e7d32}
+ #testResult.error{display:block;background:#ffebee;color:#c62828}
 </style>
-<h1>Einstellungen</h1>
-{% if request.query_params.get('saved') %}<p style="color:green">Gespeichert.</p>{% endif %}
 
-<form method="post" action="/settings">
-  <label>Spoolman API Base</label>
-  <input name="SPOOLMAN_BASE" type="text" value="{{cfg.SPOOLMAN_BASE}}">
-  <label>SimplyPrint API Base</label>
-  <input name="SP_BASE" type="text" value="{{cfg.SP_BASE}}">
-  <label>SimplyPrint Token {% if cfg.SP_TOKEN_SET %}(• gespeichert){% endif %}</label>
-  <input name="SP_TOKEN" type="password" placeholder="{% if cfg.SP_TOKEN_SET %}••••••••{% else %}Token eintragen{% endif %}">
-  <label>Sync-Intervall (Sek.)</label>
-  <input name="SYNC_INTERVAL_SECONDS" type="number" min="30" value="{{cfg.SYNC_INTERVAL_SECONDS}}">
-  <label>Epsilon (g)</label>
-  <input name="EPSILON_GRAMS" type="number" step="0.01" min="0.01" value="{{cfg.EPSILON_GRAMS}}">
-  <label><input type="checkbox" name="DRY_RUN" value="true" {% if cfg.DRY_RUN=='true' %}checked{% endif %}> Dry-Run (nur lesen)</label>
-  <p><button class="btn" type="submit">Speichern</button> <a class="btn" href="/">Zurück</a></p>
-</form>
+<div class="container">
+  <h1>⚙️ Einstellungen</h1>
+  
+  {% if request.query_params.get('saved') %}
+  <div class="success">✓ Einstellungen wurden erfolgreich gespeichert!</div>
+  {% endif %}
 
-<form method="post" action="/settings/test">
-  <button class="btn">Verbindungen testen</button>
-</form>
+  <form method="post" action="/settings">
+    
+    <!-- Spoolman Einstellungen -->
+    <div class="section">
+      <h2>🗄️ Spoolman</h2>
+      
+      <label>Spoolman API Basis-URL</label>
+      <input name="SPOOLMAN_BASE" type="text" value="{{cfg.SPOOLMAN_BASE}}" required>
+      <div class="hint">Beispiel: http://127.0.0.1:7912/api/v1</div>
+    </div>
+
+    <!-- SimplyPrint Einstellungen -->
+    <div class="section">
+      <h2>🖨️ SimplyPrint</h2>
+      
+      <label>SimplyPrint API Basis-URL</label>
+      <input name="SP_BASE" type="text" value="{{cfg.SP_BASE}}" required>
+      <div class="hint">Standard: https://api.simplyprint.io</div>
+      
+      <label>Company/Organization ID *</label>
+      <input name="SP_COMPANY_ID" type="text" value="{{cfg.SP_COMPANY_ID}}" required 
+             placeholder="z.B. 123" pattern="[0-9]+">
+      <div class="hint">
+        Die ID deiner Firma findest du in der SimplyPrint URL oder in den Kontoeinstellungen.<br>
+        Beispiel: Wenn die URL <code>https://simplyprint.io/panel/123/...</code> ist, dann ist die ID <strong>123</strong>
+      </div>
+      
+      <label>API Token {% if cfg.SP_TOKEN_SET %}(● gespeichert){% endif %} *</label>
+      <input name="SP_TOKEN" type="password" 
+             placeholder="{% if cfg.SP_TOKEN_SET %}••••••••{% else %}Token hier eintragen{% endif %}">
+      <div class="hint">
+        Erstelle einen API-Key in den SimplyPrint 
+        <a href="https://simplyprint.io/panel/user_settings/api" target="_blank">Account-Einstellungen</a>
+      </div>
+    </div>
+
+    <!-- Sync Einstellungen -->
+    <div class="section">
+      <h2>🔄 Synchronisierung</h2>
+      
+      <label>Sync-Intervall (Sekunden)</label>
+      <input name="SYNC_INTERVAL_SECONDS" type="number" min="30" value="{{cfg.SYNC_INTERVAL_SECONDS}}" required>
+      <div class="hint">Wie oft soll synchronisiert werden? Minimum: 30 Sekunden</div>
+      
+      <label>Epsilon (Gramm)</label>
+      <input name="EPSILON_GRAMS" type="number" step="0.01" min="0.01" value="{{cfg.EPSILON_GRAMS}}" required>
+      <div class="hint">
+        Minimale Gewichtsdifferenz für Updates. Verhindert zu viele kleine Änderungen.<br>
+        Empfohlen: 0.5 - 2.0 Gramm
+      </div>
+      
+      <div class="checkbox-wrapper">
+        <input type="checkbox" name="DRY_RUN" id="dry_run" value="true" 
+               {% if cfg.DRY_RUN=='true' %}checked{% endif %}>
+        <label for="dry_run" style="margin:0;font-weight:normal">
+          Dry-Run Modus (nur lesen, keine Änderungen schreiben)
+        </label>
+      </div>
+      <div class="hint">
+        Im Dry-Run-Modus werden keine Daten geschrieben. Nützlich zum Testen.
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button class="btn btn-primary" type="submit">💾 Speichern</button>
+      <a class="btn btn-link" href="/">← Zurück zum Dashboard</a>
+    </div>
+  </form>
+
+  <!-- Test-Verbindung -->
+  <div class="section" style="margin-top:2rem;border-top:2px solid #eee;padding-top:2rem">
+    <h2>🔌 Verbindung testen</h2>
+    <p>Teste die Verbindung zu Spoolman und SimplyPrint, um sicherzustellen, dass alles richtig konfiguriert ist.</p>
+    <button class="btn btn-secondary" type="button" onclick="testConnections()">
+      Test starten
+    </button>
+    <div id="testResult"></div>
+  </div>
+
+  <!-- Hilfe -->
+  <div class="section" style="border:none">
+    <h2>❓ Hilfe</h2>
+    <p><strong>SimplyPrint Company ID finden:</strong></p>
+    <ol style="color:#666;line-height:1.8">
+      <li>Gehe zu <a href="https://simplyprint.io/panel" target="_blank">SimplyPrint Panel</a></li>
+      <li>Schau in die Browser-URL: <code>https://simplyprint.io/panel/<strong style="color:#4CAF50">[DEINE_ID]</strong>/...</code></li>
+      <li>Die Zahl nach <code>/panel/</code> ist deine Company ID</li>
+    </ol>
+    
+    <p style="margin-top:1rem"><strong>API Token erstellen:</strong></p>
+    <ol style="color:#666;line-height:1.8">
+      <li>Gehe zu <a href="https://simplyprint.io/panel/user_settings/api" target="_blank">SimplyPrint API Einstellungen</a></li>
+      <li>Klicke auf "Create new API key"</li>
+      <li>Kopiere den Token und füge ihn oben ein</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+async function testConnections() {
+  const btn = event.target;
+  const result = document.getElementById('testResult');
+  
+  btn.disabled = true;
+  btn.textContent = 'Teste...';
+  result.className = '';
+  result.style.display = 'none';
+  
+  try {
+    const response = await fetch('/settings/test', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'}
+    });
+    
+    const data = await response.json();
+    
+    let html = '<strong>Testergebnisse:</strong><br>';
+    
+    if (data.spoolman) {
+      html += '✓ Spoolman: Verbindung erfolgreich<br>';
+    } else {
+      html += '✗ Spoolman: Verbindung fehlgeschlagen<br>';
+    }
+    
+    if (data.simplyprint) {
+      html += '✓ SimplyPrint: Verbindung erfolgreich<br>';
+    } else {
+      html += '✗ SimplyPrint: Verbindung fehlgeschlagen<br>';
+    }
+    
+    if (data.msg) {
+      html += '<br><small>' + data.msg + '</small>';
+    }
+    
+    result.innerHTML = html;
+    result.className = (data.spoolman && data.simplyprint) ? 'success' : 'error';
+    
+  } catch (error) {
+    result.innerHTML = '✗ Fehler beim Testen: ' + error.message;
+    result.className = 'error';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Test starten';
+  }
+}
+</script>
