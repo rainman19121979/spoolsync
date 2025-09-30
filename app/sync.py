@@ -128,7 +128,7 @@ def calculate_weight_from_length(
     return round((length_mm / 1000.0) * gpm, 2)
 
 
-async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float):
+async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp_filament: Dict[str, Any]):
     """
     Aktualisiert die verbleibende Länge in SimplyPrint basierend auf Waagen-Messung.
 
@@ -136,13 +136,29 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float):
         spc: SimplyPrintClient
         uid: 4-Zeichen Filament-Code
         remaining_length_mm: Verbleibende Länge in Millimetern
+        sp_filament: Das komplette SimplyPrint Filament-Dict für alle benötigten Felder
     """
     try:
-        # SimplyPrint erwartet "left" als verbleibende Länge
-        # Das Update erfolgt über das update_filament endpoint
+        # SimplyPrint Create/Update Endpoint benötigt ALLE Felder, nicht nur "left"
+        # Wir müssen das existierende Filament mit dem neuen "left" Wert überschreiben
+
         payload = {
-            "left": max(0, int(remaining_length_mm))  # SimplyPrint erwartet Integer in mm
+            "left": max(0, int(remaining_length_mm)),  # Neuer Wert
+            "total_length": int(sp_filament.get("total", 0)),  # Muss vorhanden sein
+            "color_name": sp_filament.get("colorName", ""),
+            "color_hex": sp_filament.get("colorHex", "#FFFFFF"),
+            "width": float(sp_filament.get("dia", 1.75)),
+            "density": float(sp_filament.get("density", 1.24)),
+            "brand": sp_filament.get("brand", ""),
         }
+
+        # Material Type
+        sp_type = sp_filament.get("type", {})
+        if isinstance(sp_type, dict):
+            payload["filament_type"] = sp_type.get("name", "PLA")
+        else:
+            payload["filament_type"] = str(sp_type) if sp_type else "PLA"
+
         await spc.update_filament(uid, payload)
         logger.debug(f"SimplyPrint Filament {uid} aktualisiert: left={payload['left']}mm")
     except Exception as e:
@@ -464,7 +480,8 @@ async def calculate_and_sync_usage(
     spc,
     filament_data: Dict[str, Any],
     sm_spool: Dict[str, Any],
-    last_sync_time: Optional[float] = None
+    last_sync_time: Optional[float] = None,
+    sp_filament: Optional[Dict[str, Any]] = None
 ) -> float:
     """
     Berechnet den Verbrauch aus SimplyPrint-Längen und synchronisiert zu Spoolman.
@@ -502,8 +519,13 @@ async def calculate_and_sync_usage(
     used_g = round((length_used_mm / 1000.0) * gpm, 2)
     cur_used = float(sm_spool.get("used_weight") or 0)
 
-    # Timestamp-basierte Synchronisation prüfen
-    # Wenn Spoolman neuer ist als letzter Sync → Waagen-Messung hat Vorrang
+    # Bidirektionale Synchronisation: Spoolman → SimplyPrint
+    #
+    # Wenn Spoolman nach dem letzten Sync aktualisiert wurde (manuelle Änderung/Waage),
+    # dann ist Spoolman die "Source of Truth" und SimplyPrint wird aktualisiert.
+    #
+    # Ansonsten: SimplyPrint → Spoolman (normaler Verbrauch durch Druck)
+    #
     sm_updated = sm_spool.get("last_used") or sm_spool.get("updated_at")
     if sm_updated and last_sync_time:
         try:
@@ -513,11 +535,11 @@ async def calculate_and_sync_usage(
             else:
                 sm_timestamp = sm_updated
 
-            # Wenn Spoolman nach letztem Sync aktualisiert wurde UND Wert abweicht
+            # Wenn Spoolman NEUER als letzter Sync UND Wert abweicht
             if sm_timestamp > last_sync_time and abs(used_g - cur_used) > EPS():
                 logger.info(
-                    f"Spoolman-Wert ist neuer (Waagen-Messung?) für lot_nr={filament_data['uid']}: "
-                    f"Spoolman={cur_used}g vs SimplyPrint={used_g}g - behalte Spoolman-Wert"
+                    f"Spoolman-Wert ist neuer (manuelle Änderung/Waage) für lot_nr={filament_data['uid']}: "
+                    f"Spoolman={cur_used}g vs SimplyPrint={used_g}g - aktualisiere SimplyPrint"
                 )
 
                 # Berechne verbleibende Länge aus Spoolman used_weight zurück
@@ -534,42 +556,21 @@ async def calculate_and_sync_usage(
 
                 # Aktualisiere SimplyPrint mit korrigiertem Wert
                 if S.get("DRY_RUN", "false") != "true":
-                    await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm)
-                    logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_length_mm:.0f}mm verbleibend")
-
-                    # WICHTIG: Speichere den Spoolman-Wert und verhindere Überschreiben für die nächsten paar Syncs
-                    # Setze einen "letzten bidirektionalen Sync" Timestamp für diese Spule
-                    S.set(f"BIDIRECTIONAL_SYNC_{filament_data['uid']}", str(time.time()))
-                    logger.debug(f"Bidirektionaler Sync markiert für lot_nr={filament_data['uid']}")
+                    if sp_filament:
+                        await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm, sp_filament)
+                        logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_length_mm:.0f}mm verbleibend")
+                    else:
+                        logger.warning(f"Kann SimplyPrint nicht aktualisieren - sp_filament fehlt für {filament_data['uid']}")
                 else:
                     logger.info(f"[DRY-RUN] Würde SimplyPrint aktualisieren: {remaining_length_mm:.0f}mm verbleibend")
 
-                return cur_used  # Behalte Spoolman-Wert
+                # Spoolman-Wert beibehalten - beim nächsten Sync sollten beide Systeme synchron sein
+                return cur_used
 
         except Exception as e:
             logger.warning(f"Fehler beim Timestamp-Vergleich für lot_nr={filament_data['uid']}: {e}")
 
     # Normal: SimplyPrint → Spoolman
-    # ABER: Prüfe erst ob kürzlich ein bidirektionaler Sync stattfand (Grace Period: 5 Minuten)
-    bidirect_sync_time_str = S.get(f"BIDIRECTIONAL_SYNC_{filament_data['uid']}")
-    if bidirect_sync_time_str:
-        try:
-            bidirect_sync_time = float(bidirect_sync_time_str)
-            grace_period = 300  # 5 Minuten in Sekunden
-            if time.time() - bidirect_sync_time < grace_period:
-                # Innerhalb der Grace Period: Spoolman-Wert beibehalten, nicht überschreiben
-                logger.info(
-                    f"Innerhalb Grace Period nach bidirektionalem Sync für lot_nr={filament_data['uid']} - "
-                    f"behalte Spoolman-Wert {cur_used}g (SimplyPrint: {used_g}g)"
-                )
-                return cur_used
-            else:
-                # Grace Period vorbei: Marker löschen
-                S.set(f"BIDIRECTIONAL_SYNC_{filament_data['uid']}", "")
-                logger.debug(f"Grace Period abgelaufen für lot_nr={filament_data['uid']}")
-        except (ValueError, TypeError):
-            pass
-
     # Prüfen ob Update nötig ist
     if abs(used_g - cur_used) <= EPS():
         logger.debug(f"Kein Update nötig für lot_nr={filament_data['uid']} (Δ={abs(used_g - cur_used):.2f}g)")
@@ -652,7 +653,7 @@ async def sync_single_filament(
         # Verbrauch berechnen und synchronisieren
         used_g = 0.0
         if sm_spool:
-            used_g = await calculate_and_sync_usage(smc, spc, filament_data, sm_spool, last_sync_time)
+            used_g = await calculate_and_sync_usage(smc, spc, filament_data, sm_spool, last_sync_time, sp_filament)
         
         # Lokale DB aktualisieren
         upsert_spool(session, {
