@@ -139,6 +139,11 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         sp_filament: Das komplette SimplyPrint Filament-Dict für alle benötigten Felder
     """
     try:
+        # SimplyPrint Create/Update Endpoint benötigt die numerische ID, nicht die UID
+        filament_id = sp_filament.get("id")
+        if not filament_id:
+            raise ValueError(f"Filament ID fehlt für UID {uid}")
+
         # SimplyPrint Create/Update Endpoint benötigt ALLE Felder, nicht nur "left"
         # Wir müssen das existierende Filament mit dem neuen "left" Wert überschreiben
 
@@ -159,8 +164,9 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         else:
             payload["filament_type"] = str(sp_type) if sp_type else "PLA"
 
-        await spc.update_filament(uid, payload)
-        logger.debug(f"SimplyPrint Filament {uid} aktualisiert: left={payload['left']}mm")
+        # Verwende die numerische ID für das Update
+        await spc.update_filament(str(filament_id), payload)
+        logger.debug(f"SimplyPrint Filament {uid} (ID: {filament_id}) aktualisiert: left={payload['left']}mm")
     except Exception as e:
         logger.error(f"Fehler beim Aktualisieren von SimplyPrint Filament {uid}: {e}")
 
