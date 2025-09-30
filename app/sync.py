@@ -541,6 +541,15 @@ async def calculate_and_sync_usage(
             else:
                 sm_timestamp = sm_updated
 
+            # Debug-Info
+            sm_dt = datetime.fromtimestamp(sm_timestamp, tz=timezone.utc)
+            last_sync_dt = datetime.fromtimestamp(last_sync_time, tz=timezone.utc)
+            logger.debug(
+                f"Timestamp-Check für lot_nr={filament_data['uid']}: "
+                f"Spoolman={sm_dt.isoformat()} vs LastSync={last_sync_dt.isoformat()}, "
+                f"Δweight={abs(used_g - cur_used):.2f}g (EPS={EPS():.2f}g)"
+            )
+
             # Wenn Spoolman NEUER als letzter Sync UND Wert abweicht
             if sm_timestamp > last_sync_time and abs(used_g - cur_used) > EPS():
                 logger.info(
@@ -603,12 +612,17 @@ async def calculate_and_sync_usage(
             "used_weight": used_g,
         }
 
-        # last_used hinzufügen wenn vorhanden
+        # last_used IMMER setzen (entweder von SimplyPrint oder aktueller Timestamp)
+        # Das ist wichtig für die bidirektionale Synchronisation
         if filament_data.get("last_used"):
             last_used_iso = normalize_timestamp(filament_data["last_used"])
-            if last_used_iso:
-                update_payload["last_used"] = last_used_iso
-                logger.debug(f"Setze last_used für lot_nr={filament_data['uid']}: {last_used_iso}")
+        else:
+            # Wenn SimplyPrint keinen last_used hat, verwende aktuellen Timestamp
+            last_used_iso = datetime.now(timezone.utc).isoformat()
+
+        if last_used_iso:
+            update_payload["last_used"] = last_used_iso
+            logger.debug(f"Setze last_used für lot_nr={filament_data['uid']}: {last_used_iso}")
 
         await smc.update_spool(sm_spool.get("id"), update_payload)
         logger.info(f"Verbrauch aktualisiert für lot_nr={filament_data['uid']}: {cur_used}g → {used_g}g")
