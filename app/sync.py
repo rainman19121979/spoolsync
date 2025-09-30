@@ -295,9 +295,16 @@ def extract_filament_data(sp_filament: Dict[str, Any], sp_types: Dict[str, Any] 
             last_used = sp_filament.get(field)
             break
 
+    # Name ohne Brand (wird in Spoolman als separates Feld gespeichert)
+    color_name = sp_filament.get('colorName', '').strip()
+    if color_name:
+        name = f"{material} {color_name}"
+    else:
+        name = material
+
     return {
         "uid": sp_filament.get("uid"),  # 4-Zeichen Code
-        "name": f"{brand} {material} {sp_filament.get('colorName', '')}".strip(),
+        "name": name,  # Nur Material + Farbe (Brand ist separates Feld!)
         "brand": brand,
         "material": material,  # Nur der Material-Typ (PLA, PETG, etc.)
         "diameter_mm": diameter_mm,
