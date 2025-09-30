@@ -22,10 +22,11 @@
 - **Smart Weight Rounding**: 988g → 1000g, 1088g → 1100g (JAYO)
 - **Verbrauchsberechnung**: Automatisch aus Länge + Dichte
 
-### 📊 NFC-Waagen Support
+### 📊 NFC-Waagen Support ⚠️ (in Entwicklung)
 - **Timestamp-basiert**: Erkennt manuelle Waagen-Messungen
 - **Bidirektional**: Waagen-Updates werden zu SimplyPrint synchronisiert
 - **Automatische Priorät**: Neueste Messung gewinnt
+- **Status**: Noch nicht vollständig getestet
 
 ### 🎨 Filament-Verwaltung
 - **Vendor-Management**: Automatische Erstellung fehlender Hersteller
@@ -315,6 +316,7 @@ MIT License - siehe [LICENSE](LICENSE)
 - **SimplyPrint**: https://simplyprint.io/
 - **Spoolman**: https://github.com/Donkie/Spoolman
 - **FastAPI**: https://fastapi.tiangolo.com/
+- **Entwickelt mit Unterstützung von**: [Claude Code](https://claude.com/claude-code) (Anthropic)
 
 ---
 
