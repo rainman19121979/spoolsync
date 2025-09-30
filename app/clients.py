@@ -7,17 +7,38 @@ logger = logging.getLogger(__name__)
 
 class SpoolmanClient:
     """Client für Spoolman API."""
-    
+
     def __init__(self):
         self.base = S.get("SPOOLMAN_BASE").rstrip('/')
-    
+
     async def list_spools(self):
         """Listet alle Spulen auf."""
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.get(f"{self.base}/spool")
             r.raise_for_status()
             return r.json()
-    
+
+    async def list_filaments(self):
+        """Listet alle Filamente auf."""
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(f"{self.base}/filament")
+            r.raise_for_status()
+            return r.json()
+
+    async def list_vendors(self):
+        """Listet alle Hersteller/Vendors auf."""
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.get(f"{self.base}/vendor")
+            r.raise_for_status()
+            return r.json()
+
+    async def create_vendor(self, payload):
+        """Erstellt einen neuen Hersteller/Vendor."""
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{self.base}/vendor", json=payload)
+            r.raise_for_status()
+            return r.json()
+
     async def create_filament(self, payload):
         """Erstellt ein neues Filament."""
         async with httpx.AsyncClient(timeout=30) as c:

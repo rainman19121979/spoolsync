@@ -39,10 +39,55 @@ def normalize_color(color: Any) -> Optional[str]:
     return None
 
 
+def find_matching_filament(
+    sm_filaments: List[Dict[str, Any]],
+    filament_data: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """
+    Sucht nach einem passenden Filament in Spoolman basierend auf Material, Durchmesser und Marke.
+    """
+    for sm_fil in sm_filaments:
+        # Vergleiche Material, Durchmesser und Marke
+        material_match = (
+            sm_fil.get("material", "").lower() == filament_data.get("material", "").lower()
+        )
+        diameter_match = (
+            abs(float(sm_fil.get("diameter", 0)) - float(filament_data.get("diameter_mm", 0))) < 0.01
+        )
+
+        # Vendor kann ein Dict oder String sein
+        sm_vendor = sm_fil.get("vendor")
+        if isinstance(sm_vendor, dict):
+            sm_vendor_name = sm_vendor.get("name", "")
+        else:
+            sm_vendor_name = str(sm_vendor) if sm_vendor else ""
+
+        vendor_match = (
+            sm_vendor_name.lower() == filament_data.get("brand", "").lower()
+        )
+
+        if material_match and diameter_match and vendor_match:
+            return sm_fil
+
+    return None
+
+
+def calculate_weight_from_length(
+    length_mm: float,
+    density_g_cm3: float,
+    diameter_mm: float
+) -> float:
+    """
+    Berechnet Gewicht in Gramm aus Länge in Millimetern.
+    """
+    gpm = grams_per_meter(density_g_cm3, diameter_mm) or 2.98
+    return round((length_mm / 1000.0) * gpm, 2)
+
+
 def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extrahiert und normalisiert Filament-Daten aus SimplyPrint.
-    
+
     SimplyPrint API Struktur:
     - uid: 4-Zeichen Code (z.B. "PL23")
     - type: {id: int, name: str} oder einfach string
@@ -57,12 +102,15 @@ def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
         material = material_type.get("name", "Unknown")
     else:
         material = str(material_type) if material_type else "Unknown"
-    
+
+    # Brand extrahieren
+    brand = sp_filament.get("brand", "Unknown")
+
     return {
         "uid": sp_filament.get("uid"),  # 4-Zeichen Code
-        "name": f"{sp_filament.get('brand', 'Unknown')} {material} {sp_filament.get('colorName', '')}".strip(),
-        "brand": sp_filament.get("brand"),
-        "material": material,
+        "name": f"{brand} {material} {sp_filament.get('colorName', '')}".strip(),
+        "brand": brand,
+        "material": material,  # Nur der Material-Typ (PLA, PETG, etc.)
         "diameter_mm": float(sp_filament.get("dia", 1.75)),
         "density_g_cm3": float(sp_filament.get("density", 1.24)),
         "color_hex": normalize_color(sp_filament.get("colorHex")),
@@ -72,52 +120,119 @@ def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+async def ensure_vendor(
+    smc: SpoolmanClient,
+    brand_name: str,
+    sm_vendors: Dict[str, Dict[str, Any]]
+) -> Optional[int]:
+    """
+    Stellt sicher, dass ein Vendor in Spoolman existiert.
+    Gibt die Vendor-ID zurück oder None bei Fehler.
+    """
+    if not brand_name or brand_name == "Unknown":
+        return None
+
+    # Normalisierte Suche (case-insensitive)
+    brand_lower = brand_name.lower()
+
+    # Suche in existierenden Vendors
+    for vendor_id, vendor in sm_vendors.items():
+        vendor_name = vendor.get("name", "")
+        if vendor_name.lower() == brand_lower:
+            return vendor.get("id")
+
+    # Vendor existiert nicht, erstelle ihn
+    if S.get("DRY_RUN", "false") == "true":
+        logger.info(f"[DRY-RUN] Würde Vendor erstellen: {brand_name}")
+        return None
+
+    try:
+        new_vendor = await smc.create_vendor({"name": brand_name})
+        vendor_id = new_vendor.get("id")
+        logger.info(f"Vendor erstellt in Spoolman: {vendor_id} - {brand_name}")
+        # Zur Map hinzufügen
+        sm_vendors[str(vendor_id)] = new_vendor
+        return vendor_id
+    except Exception as e:
+        logger.error(f"Fehler beim Erstellen von Vendor '{brand_name}': {e}")
+        return None
+
+
 async def ensure_spoolman_spool(
     smc: SpoolmanClient,
     uid: str,
     filament_data: Dict[str, Any],
-    lot_map: Dict[str, Any]
+    lot_map: Dict[str, Any],
+    sm_filaments: List[Dict[str, Any]],
+    sm_vendors: Dict[str, Dict[str, Any]]
 ) -> Optional[Dict[str, Any]]:
     """
     Stellt sicher, dass eine Spule in Spoolman existiert.
     Erstellt sie bei Bedarf, wenn nicht im Dry-Run-Modus.
+    Wiederverwendet existierende Filamente, wenn Material, Durchmesser und Marke übereinstimmen.
     """
     if uid in lot_map:
         return lot_map[uid]
-    
+
     if S.get("DRY_RUN", "false") == "true":
         logger.info(f"[DRY-RUN] Würde Spule mit lot_nr={uid} in Spoolman erstellen")
         return None
-    
+
     try:
-        # Filament in Spoolman erstellen
-        sm_fil_payload = {
-            "name": filament_data["name"],
-            "diameter": filament_data["diameter_mm"],
-            "density": filament_data["density_g_cm3"],
-        }
-        if filament_data.get("material"):
-            sm_fil_payload["material"] = filament_data["material"]
-        if filament_data.get("brand"):
-            sm_fil_payload["vendor"] = {"name": filament_data["brand"]}
-        if filament_data["color_hex"]:
-            sm_fil_payload["color_hex"] = filament_data["color_hex"]
-        
-        sm_fil = await smc.create_filament(sm_fil_payload)
-        logger.info(f"Filament erstellt in Spoolman: {sm_fil.get('id')} - {filament_data['name']}")
-        
+        # Suche nach existierendem Filament
+        sm_fil = find_matching_filament(sm_filaments, filament_data)
+
+        if sm_fil:
+            logger.info(f"Bestehendes Filament gefunden: {sm_fil.get('id')} - {sm_fil.get('name')}")
+        else:
+            # Vendor sicherstellen
+            vendor_id = None
+            if filament_data.get("brand"):
+                vendor_id = await ensure_vendor(smc, filament_data["brand"], sm_vendors)
+
+            # Filament in Spoolman erstellen
+            sm_fil_payload = {
+                "name": filament_data["name"],
+                "diameter": filament_data["diameter_mm"],
+                "density": filament_data["density_g_cm3"],
+            }
+            if filament_data.get("material"):
+                sm_fil_payload["material"] = filament_data["material"]
+            if vendor_id:
+                sm_fil_payload["vendor_id"] = vendor_id
+            if filament_data["color_hex"]:
+                sm_fil_payload["color_hex"] = filament_data["color_hex"]
+
+            sm_fil = await smc.create_filament(sm_fil_payload)
+            logger.info(f"Filament erstellt in Spoolman: {sm_fil.get('id')} - {filament_data['name']}")
+            # Zur Liste hinzufügen für zukünftige Matches
+            sm_filaments.append(sm_fil)
+
+        # Gesamtgewicht aus SimplyPrint-Länge berechnen
+        total_weight = None
+        if filament_data.get("total_length_mm"):
+            total_weight = calculate_weight_from_length(
+                filament_data["total_length_mm"],
+                filament_data["density_g_cm3"],
+                filament_data["diameter_mm"]
+            )
+
         # Spule in Spoolman erstellen
         sm_spool = await smc.create_spool({
             "filament_id": sm_fil.get("id"),
             "lot_nr": uid,
-            "spool_weight": 250,  # Standard Spulengewicht
+            "spool_weight": 250,  # Standard Spulengewicht (leer)
+            "initial_weight": total_weight,  # Gesamtgewicht des Filaments
             "price": 0,
             "used_weight": 0,
             "archived": False,
         })
-        logger.info(f"Spule erstellt in Spoolman: {sm_spool.get('id')} (lot_nr={uid})")
+        logger.info(
+            f"Spule erstellt in Spoolman: {sm_spool.get('id')} (lot_nr={uid}, "
+            f"initial_weight={total_weight}g)"
+        )
         return sm_spool
-        
+
     except Exception as e:
         logger.error(f"Fehler beim Erstellen der Spule in Spoolman (lot_nr={uid}): {e}")
         return None
@@ -191,6 +306,8 @@ async def sync_single_filament(
     smc: SpoolmanClient,
     sp_filament: Dict[str, Any],
     lot_map: Dict[str, Any],
+    sm_filaments: List[Dict[str, Any]],
+    sm_vendors: Dict[str, Dict[str, Any]],
     session
 ) -> bool:
     """
@@ -200,11 +317,11 @@ async def sync_single_filament(
     try:
         # Daten extrahieren und validieren
         filament_data = extract_filament_data(sp_filament)
-        
+
         if not filament_data["uid"]:
             logger.warning(f"Filament ohne UID übersprungen: {sp_filament}")
             return False
-        
+
         # Filament in lokaler DB speichern/aktualisieren
         filament_id = upsert_filament(session, {
             "name": filament_data["name"],
@@ -215,9 +332,9 @@ async def sync_single_filament(
             "color_hex": filament_data["color_hex"],
             "nominal_weight_g": filament_data["nominal_weight_g"],
         })
-        
+
         # Spoolman-Spule sicherstellen
-        sm_spool = await ensure_spoolman_spool(smc, filament_data["uid"], filament_data, lot_map)
+        sm_spool = await ensure_spoolman_spool(smc, filament_data["uid"], filament_data, lot_map, sm_filaments, sm_vendors)
         
         # Verbrauch berechnen und synchronisieren
         used_g = 0.0
@@ -245,22 +362,24 @@ async def sync_single_filament(
 async def run_sync_once():
     """Führt einen vollständigen Synchronisierungslauf durch."""
     logger.info("=== Sync gestartet ===")
-    
+
     spc = SimplyPrintClient()
     smc = SpoolmanClient()
-    
+
     # 1) Daten von beiden APIs laden
     try:
         sp_resp = await spc.list_filaments()
         sm_spools = await smc.list_spools()
+        sm_filaments = await smc.list_filaments()
+        sm_vendors_list = await smc.list_vendors()
     except Exception as e:
         logger.error(f"Fehler beim Laden der Daten: {e}", exc_info=True)
         return
-    
+
     # SimplyPrint Response normalisieren
     # API gibt {"status": true, "filament": {id: {...}, id: {...}}} zurück
     sp_filaments_dict: Dict[str, Any] = {}
-    
+
     if isinstance(sp_resp, dict):
         if "filament" in sp_resp and isinstance(sp_resp["filament"], dict):
             sp_filaments_dict = sp_resp["filament"]
@@ -270,11 +389,11 @@ async def run_sync_once():
     else:
         logger.error(f"SimplyPrint Response ist kein Dictionary: {type(sp_resp)}")
         return
-    
+
     # Dictionary zu Liste umwandeln
     sp_filaments = list(sp_filaments_dict.values())
     logger.info(f"SimplyPrint: {len(sp_filaments)} Filamente gefunden")
-    
+
     # Spoolman lot_nr Map erstellen
     lot_map: Dict[str, Dict[str, Any]] = {}
     if isinstance(sm_spools, list):
@@ -283,24 +402,37 @@ async def run_sync_once():
             for s in sm_spools
             if isinstance(s, dict) and s.get("lot_nr")
         }
-    
+
     logger.info(f"Spoolman: {len(lot_map)} Spulen mit lot_nr gefunden")
-    
+
+    # Spoolman Filamente zur Liste machen
+    if not isinstance(sm_filaments, list):
+        sm_filaments = []
+
+    logger.info(f"Spoolman: {len(sm_filaments)} Filamente gefunden")
+
+    # Spoolman Vendors zu Dictionary machen (id -> vendor)
+    sm_vendors: Dict[str, Dict[str, Any]] = {}
+    if isinstance(sm_vendors_list, list):
+        sm_vendors = {str(v.get("id")): v for v in sm_vendors_list if isinstance(v, dict)}
+
+    logger.info(f"Spoolman: {len(sm_vendors)} Vendors gefunden")
+
     # 2) Alle Filamente synchronisieren
     success_count = 0
     error_count = 0
-    
+
     with get_session() as session:
         for sp_filament in sp_filaments:
             if not isinstance(sp_filament, dict):
                 logger.warning(f"Überspringe ungültigen Eintrag: {type(sp_filament)}")
                 continue
-            
-            if await sync_single_filament(smc, sp_filament, lot_map, session):
+
+            if await sync_single_filament(smc, sp_filament, lot_map, sm_filaments, sm_vendors, session):
                 success_count += 1
             else:
                 error_count += 1
-    
+
     logger.info(f"=== Sync abgeschlossen: {success_count} erfolgreich, {error_count} Fehler ===")
 
 
