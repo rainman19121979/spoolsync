@@ -60,6 +60,13 @@ class SpoolmanClient:
             r.raise_for_status()
             return r.json()
 
+    async def delete_spool(self, spool_id):
+        """Löscht eine Spule."""
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.delete(f"{self.base}/spool/{spool_id}")
+            r.raise_for_status()
+            return True
+
 
 class SimplyPrintClient:
     """
@@ -122,25 +129,49 @@ class SimplyPrintClient:
     async def list_filaments(self):
         """
         Listet alle Filamente auf.
-        
+
         Endpoint: GET /{id}/filament/GetFilament
-        
+
         Returns:
             Dictionary mit 'filament' key, der ein Dictionary von Filamenten enthält
         """
         async with httpx.AsyncClient(timeout=30, headers=self.headers) as c:
             url = f"{self.base}/filament/GetFilament"
             logger.debug(f"Lade Filamente von: {url}")
-            
+
             r = await c.get(url)
             r.raise_for_status()
             data = r.json()
-            
+
             # API Fehlerbehandlung
             if not data.get("status"):
                 error_msg = data.get("message", "Unbekannter Fehler")
                 raise Exception(f"SimplyPrint API Fehler: {error_msg}")
-            
+
+            return data
+
+    async def get_filament_types(self):
+        """
+        Holt alle Filament-Typen mit Details (Material, Dichte, Hersteller, etc.).
+
+        Endpoint: GET /{id}/filament/type/Get
+
+        Returns:
+            Dictionary mit allen Filament-Types
+        """
+        async with httpx.AsyncClient(timeout=30, headers=self.headers) as c:
+            url = f"{self.base}/filament/type/Get"
+            logger.debug(f"Lade Filament-Types von: {url}")
+
+            r = await c.get(url)
+            r.raise_for_status()
+            data = r.json()
+
+            # API Fehlerbehandlung
+            if not data.get("status"):
+                error_msg = data.get("message", "Unbekannter Fehler")
+                raise Exception(f"SimplyPrint API Fehler: {error_msg}")
+
             return data
     
     async def create_filament(self, payload):

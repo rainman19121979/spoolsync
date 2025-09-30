@@ -1,5 +1,7 @@
 import math
 import logging
+import time
+from datetime import datetime, timezone
 from typing import Optional, Dict, List, Any
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .db import get_session, upsert_filament, upsert_spool
@@ -36,6 +38,37 @@ def normalize_color(color: Any) -> Optional[str]:
         return color_str
     if len(color_str) == 6:
         return f"#{color_str}"
+    return None
+
+
+def normalize_timestamp(timestamp: Any) -> Optional[str]:
+    """
+    Normalisiert Timestamps zu ISO 8601 Format für Spoolman.
+
+    Args:
+        timestamp: Unix timestamp (int/float) oder ISO string
+
+    Returns:
+        ISO 8601 string oder None
+    """
+    if not timestamp:
+        return None
+
+    try:
+        # Falls bereits ein String (ISO format)
+        if isinstance(timestamp, str):
+            # Validierung durch Parsing
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            return dt.isoformat()
+
+        # Falls Unix timestamp (Sekunden)
+        if isinstance(timestamp, (int, float)):
+            dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            return dt.isoformat()
+
+    except Exception as e:
+        logger.warning(f"Ungültiger Timestamp: {timestamp} - {e}")
+
     return None
 
 
@@ -84,6 +117,49 @@ def calculate_weight_from_length(
     return round((length_mm / 1000.0) * gpm, 2)
 
 
+async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float):
+    """
+    Aktualisiert die verbleibende Länge in SimplyPrint basierend auf Waagen-Messung.
+
+    Args:
+        spc: SimplyPrintClient
+        uid: 4-Zeichen Filament-Code
+        remaining_length_mm: Verbleibende Länge in Millimetern
+    """
+    try:
+        # SimplyPrint erwartet "left" als verbleibende Länge
+        # Das Update erfolgt über das update_filament endpoint
+        payload = {
+            "left": max(0, int(remaining_length_mm))  # SimplyPrint erwartet Integer in mm
+        }
+        await spc.update_filament(uid, payload)
+        logger.debug(f"SimplyPrint Filament {uid} aktualisiert: left={payload['left']}mm")
+    except Exception as e:
+        logger.error(f"Fehler beim Aktualisieren von SimplyPrint Filament {uid}: {e}")
+
+
+def round_to_standard_weight(weight_g: float, brand: str = "") -> float:
+    """
+    Rundet Gewicht auf Standard-Spulengrößen.
+    z.B. 988g → 1000g, 1088g → 1100g (nur JAYO), sonst → 1000g
+    """
+    # Standard-Gewichte (1100g nur für JAYO)
+    if brand.upper() == "JAYO" and 1000 < weight_g < 1200:
+        standard_weights = [250, 500, 1000, 1100, 2000, 5000, 10000]
+    else:
+        standard_weights = [250, 500, 1000, 2000, 5000, 10000]
+
+    # Finde nächstes Standard-Gewicht
+    closest = min(standard_weights, key=lambda x: abs(x - weight_g))
+
+    # Wenn innerhalb von ±12% des Standard-Gewichts, runde darauf
+    tolerance = 0.12
+    if abs(weight_g - closest) / closest <= tolerance:
+        return float(closest)
+
+    return weight_g
+
+
 def extract_material_type(type_field: Any) -> str:
     """
     Extrahiert den reinen Material-Typ aus dem SimplyPrint type-Feld.
@@ -114,7 +190,7 @@ def extract_material_type(type_field: Any) -> str:
     return material
 
 
-def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
+def extract_filament_data(sp_filament: Dict[str, Any], sp_types: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     Extrahiert und normalisiert Filament-Daten aus SimplyPrint.
 
@@ -126,6 +202,10 @@ def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
     - total: Gesamtlänge in mm
     - left: Verbleibende Länge in mm
     - spoolWeight: Gewicht der leeren Spule in Gramm
+
+    Args:
+        sp_filament: Filament-Daten aus SimplyPrint
+        sp_types: Optional - Filament-Types Dictionary aus GET /{id}/filament/type/Get
     """
     # Material-Typ extrahieren (nur PLA/PETG/etc., ohne Hersteller)
     material = extract_material_type(sp_filament.get("type"))
@@ -133,21 +213,54 @@ def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
     # Brand extrahieren
     brand = sp_filament.get("brand", "Unknown")
 
+    # Durchmesser und Dichte - erst aus Filament, dann aus Type
+    diameter_mm = float(sp_filament.get("dia", 1.75))
+    density_g_cm3 = float(sp_filament.get("density", 1.24))
+
+    # Wenn sp_types verfügbar, versuche bessere Werte aus dem Type zu holen
+    if sp_types:
+        type_obj = sp_filament.get("type")
+        type_id = None
+
+        if isinstance(type_obj, dict):
+            type_id = type_obj.get("id")
+        elif isinstance(type_obj, int):
+            type_id = type_obj
+
+        if type_id and str(type_id) in sp_types:
+            type_data = sp_types[str(type_id)]
+            # Überschreibe mit Werten aus Type, falls vorhanden
+            if type_data.get("density"):
+                density_g_cm3 = float(type_data["density"])
+            if type_data.get("diameter") or type_data.get("dia"):
+                diameter_mm = float(type_data.get("diameter") or type_data.get("dia", diameter_mm))
+            # Brand aus Type verwenden wenn im Filament nicht gesetzt
+            if brand == "Unknown" and type_data.get("brand"):
+                brand = type_data["brand"]
+
     # Spulengewicht (leer)
     spool_weight = sp_filament.get("spoolWeight") or sp_filament.get("spool_weight")
+
+    # Zuletzt benutzt - SimplyPrint kann verschiedene Felder haben
+    last_used = None
+    for field in ["lastUsed", "last_used", "used", "lastActive"]:
+        if sp_filament.get(field):
+            last_used = sp_filament.get(field)
+            break
 
     return {
         "uid": sp_filament.get("uid"),  # 4-Zeichen Code
         "name": f"{brand} {material} {sp_filament.get('colorName', '')}".strip(),
         "brand": brand,
         "material": material,  # Nur der Material-Typ (PLA, PETG, etc.)
-        "diameter_mm": float(sp_filament.get("dia", 1.75)),
-        "density_g_cm3": float(sp_filament.get("density", 1.24)),
+        "diameter_mm": diameter_mm,
+        "density_g_cm3": density_g_cm3,
         "color_hex": normalize_color(sp_filament.get("colorHex")),
         "nominal_weight_g": None,  # SimplyPrint hat kein direktes Filament-Gewicht
         "total_length_mm": sp_filament.get("total"),  # Gesamtlänge in mm
         "left_length_mm": sp_filament.get("left"),   # Verbleibend in mm
-        "spool_weight_g": float(spool_weight) if spool_weight else 250.0,  # Gewicht der leeren Spule
+        "spool_weight_g": float(spool_weight) if spool_weight else None,  # Gewicht der leeren Spule oder None
+        "last_used": last_used,  # Zuletzt benutzt Timestamp
     }
 
 
@@ -234,42 +347,55 @@ async def ensure_spoolman_spool(
             if filament_data["color_hex"]:
                 sm_fil_payload["color_hex"] = filament_data["color_hex"]
 
-            # Gewicht: Berechne aus total_length wenn vorhanden
+            # Gewicht: Berechne aus total_length wenn vorhanden und runde auf Standard-Gewicht
             if filament_data.get("total_length_mm"):
                 weight = calculate_weight_from_length(
                     filament_data["total_length_mm"],
                     filament_data["density_g_cm3"],
                     filament_data["diameter_mm"]
                 )
-                sm_fil_payload["weight"] = weight
+                sm_fil_payload["weight"] = round_to_standard_weight(weight, filament_data.get("brand", ""))
 
             sm_fil = await smc.create_filament(sm_fil_payload)
             logger.info(f"Filament erstellt in Spoolman: {sm_fil.get('id')} - {filament_data['name']}")
             # Zur Liste hinzufügen für zukünftige Matches
             sm_filaments.append(sm_fil)
 
-        # Gesamtgewicht aus SimplyPrint-Länge berechnen
+        # Gesamtgewicht aus SimplyPrint-Länge berechnen und auf Standard-Gewicht runden
         total_weight = None
         if filament_data.get("total_length_mm"):
-            total_weight = calculate_weight_from_length(
+            calculated_weight = calculate_weight_from_length(
                 filament_data["total_length_mm"],
                 filament_data["density_g_cm3"],
                 filament_data["diameter_mm"]
             )
+            total_weight = round_to_standard_weight(calculated_weight, filament_data.get("brand", ""))
 
         # Spule in Spoolman erstellen
-        sm_spool = await smc.create_spool({
+        spool_payload = {
             "filament_id": sm_fil.get("id"),
             "lot_nr": uid,
-            "spool_weight": filament_data.get("spool_weight_g", 250.0),  # Spulengewicht von SimplyPrint
-            "initial_weight": total_weight,  # Gesamtgewicht des Filaments
+            "initial_weight": total_weight,  # Gesamtgewicht des Filaments (gerundet)
             "price": 0,
             "used_weight": 0,
             "archived": False,
-        })
+        }
+
+        # spool_weight nur setzen wenn vorhanden
+        if filament_data.get("spool_weight_g"):
+            spool_payload["spool_weight"] = filament_data["spool_weight_g"]
+
+        # last_used setzen wenn vorhanden
+        if filament_data.get("last_used"):
+            last_used_iso = normalize_timestamp(filament_data["last_used"])
+            if last_used_iso:
+                spool_payload["last_used"] = last_used_iso
+
+        sm_spool = await smc.create_spool(spool_payload)
+        spool_weight_log = filament_data.get('spool_weight_g', 'nicht gesetzt')
         logger.info(
             f"Spule erstellt in Spoolman: {sm_spool.get('id')} (lot_nr={uid}, "
-            f"spool_weight={filament_data.get('spool_weight_g', 250.0)}g, "
+            f"spool_weight={spool_weight_log}, "
             f"initial_weight={total_weight}g)"
         )
         return sm_spool
@@ -281,12 +407,24 @@ async def ensure_spoolman_spool(
 
 async def calculate_and_sync_usage(
     smc: SpoolmanClient,
+    spc,
     filament_data: Dict[str, Any],
-    sm_spool: Dict[str, Any]
+    sm_spool: Dict[str, Any],
+    last_sync_time: Optional[float] = None
 ) -> float:
     """
     Berechnet den Verbrauch aus SimplyPrint-Längen und synchronisiert zu Spoolman.
-    Gibt das berechnete used_weight zurück.
+    Unterstützt bidirektionale Synchronisation bei Waagen-Messungen.
+
+    Args:
+        smc: SpoolmanClient
+        spc: SimplyPrintClient
+        filament_data: Filament-Daten aus SimplyPrint
+        sm_spool: Spulen-Daten aus Spoolman
+        last_sync_time: Timestamp des letzten Syncs (Unix timestamp)
+
+    Returns:
+        Das aktuelle used_weight
     """
     total = filament_data.get("total_length_mm")
     left = filament_data.get("left_length_mm")
@@ -306,19 +444,62 @@ async def calculate_and_sync_usage(
         filament_data["density_g_cm3"],
         filament_data["diameter_mm"]
     ) or 2.98  # Fallback für PLA 1.75mm
-    
+
     used_g = round((length_used_mm / 1000.0) * gpm, 2)
     cur_used = float(sm_spool.get("used_weight") or 0)
-    
+
+    # Timestamp-basierte Synchronisation prüfen
+    # Wenn Spoolman neuer ist als letzter Sync → Waagen-Messung hat Vorrang
+    sm_updated = sm_spool.get("last_used") or sm_spool.get("updated_at")
+    if sm_updated and last_sync_time:
+        try:
+            # Parse ISO timestamp von Spoolman
+            if isinstance(sm_updated, str):
+                sm_timestamp = datetime.fromisoformat(sm_updated.replace('Z', '+00:00')).timestamp()
+            else:
+                sm_timestamp = sm_updated
+
+            # Wenn Spoolman nach letztem Sync aktualisiert wurde UND Wert abweicht
+            if sm_timestamp > last_sync_time and abs(used_g - cur_used) > EPS():
+                logger.info(
+                    f"Spoolman-Wert ist neuer (Waagen-Messung?) für lot_nr={filament_data['uid']}: "
+                    f"Spoolman={cur_used}g vs SimplyPrint={used_g}g - behalte Spoolman-Wert"
+                )
+
+                # Berechne verbleibende Länge aus Spoolman used_weight zurück
+                initial_weight = sm_spool.get("initial_weight") or round_to_standard_weight(
+                    calculate_weight_from_length(
+                        filament_data["total_length_mm"],
+                        filament_data["density_g_cm3"],
+                        filament_data["diameter_mm"]
+                    ),
+                    filament_data.get("brand", "")
+                )
+                remaining_weight = initial_weight - cur_used
+                remaining_length_mm = (remaining_weight / gpm) * 1000.0 if gpm > 0 else 0
+
+                # Aktualisiere SimplyPrint mit korrigiertem Wert
+                if S.get("DRY_RUN", "false") != "true":
+                    await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm)
+                    logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_length_mm:.0f}mm verbleibend")
+                else:
+                    logger.info(f"[DRY-RUN] Würde SimplyPrint aktualisieren: {remaining_length_mm:.0f}mm verbleibend")
+
+                return cur_used  # Behalte Spoolman-Wert
+
+        except Exception as e:
+            logger.warning(f"Fehler beim Timestamp-Vergleich für lot_nr={filament_data['uid']}: {e}")
+
+    # Normal: SimplyPrint → Spoolman
     # Prüfen ob Update nötig ist
     if abs(used_g - cur_used) <= EPS():
         logger.debug(f"Kein Update nötig für lot_nr={filament_data['uid']} (Δ={abs(used_g - cur_used):.2f}g)")
         return used_g
-    
+
     if S.get("DRY_RUN", "false") == "true":
         logger.info(f"[DRY-RUN] Würde used_weight aktualisieren: {cur_used}g → {used_g}g (Δ={abs(used_g - cur_used):.2f}g)")
         return used_g
-    
+
     try:
         # Filament-ID defensiv extrahieren
         sm_filament_id = (
@@ -326,30 +507,42 @@ async def calculate_and_sync_usage(
             if isinstance(sm_spool.get("filament"), dict)
             else sm_spool.get("filament_id")
         )
-        
-        await smc.update_spool(sm_spool.get("id"), {
+
+        update_payload = {
             "filament_id": sm_filament_id,
             "price": sm_spool.get("price"),
             "spool_weight": sm_spool.get("spool_weight"),
             "archived": sm_spool.get("archived", False),
             "lot_nr": sm_spool.get("lot_nr"),
             "used_weight": used_g,
-        })
+        }
+
+        # last_used hinzufügen wenn vorhanden
+        if filament_data.get("last_used"):
+            last_used_iso = normalize_timestamp(filament_data["last_used"])
+            if last_used_iso:
+                update_payload["last_used"] = last_used_iso
+                logger.debug(f"Setze last_used für lot_nr={filament_data['uid']}: {last_used_iso}")
+
+        await smc.update_spool(sm_spool.get("id"), update_payload)
         logger.info(f"Verbrauch aktualisiert für lot_nr={filament_data['uid']}: {cur_used}g → {used_g}g")
-        
+
     except Exception as e:
         logger.error(f"Fehler beim Update von used_weight für lot_nr={filament_data['uid']}: {e}")
-    
+
     return used_g
 
 
 async def sync_single_filament(
     smc: SpoolmanClient,
+    spc,
     sp_filament: Dict[str, Any],
     lot_map: Dict[str, Any],
     sm_filaments: List[Dict[str, Any]],
     sm_vendors: Dict[str, Dict[str, Any]],
-    session
+    session,
+    sp_types: Dict[str, Any] = None,
+    last_sync_time: Optional[float] = None
 ) -> bool:
     """
     Synchronisiert ein einzelnes Filament.
@@ -357,7 +550,7 @@ async def sync_single_filament(
     """
     try:
         # Daten extrahieren und validieren
-        filament_data = extract_filament_data(sp_filament)
+        filament_data = extract_filament_data(sp_filament, sp_types)
 
         if not filament_data["uid"]:
             logger.warning(f"Filament ohne UID übersprungen: {sp_filament}")
@@ -376,11 +569,11 @@ async def sync_single_filament(
 
         # Spoolman-Spule sicherstellen
         sm_spool = await ensure_spoolman_spool(smc, filament_data["uid"], filament_data, lot_map, sm_filaments, sm_vendors)
-        
+
         # Verbrauch berechnen und synchronisieren
         used_g = 0.0
         if sm_spool:
-            used_g = await calculate_and_sync_usage(smc, filament_data, sm_spool)
+            used_g = await calculate_and_sync_usage(smc, spc, filament_data, sm_spool, last_sync_time)
         
         # Lokale DB aktualisieren
         upsert_spool(session, {
@@ -402,10 +595,19 @@ async def sync_single_filament(
 
 async def run_sync_once():
     """Führt einen vollständigen Synchronisierungslauf durch."""
+    # Timestamp vor dem Sync speichern
+    sync_start_time = time.time()
+
     logger.info("=== Sync gestartet ===")
 
     spc = SimplyPrintClient()
     smc = SpoolmanClient()
+
+    # Letzten Sync-Timestamp aus Settings laden (falls vorhanden)
+    last_sync_time = float(S.get("LAST_SYNC_TIME", "0"))
+    if last_sync_time > 0:
+        last_sync_dt = datetime.fromtimestamp(last_sync_time, tz=timezone.utc)
+        logger.info(f"Letzter Sync: {last_sync_dt.isoformat()}")
 
     # 1) Daten von beiden APIs laden
     try:
@@ -413,6 +615,12 @@ async def run_sync_once():
         sm_spools = await smc.list_spools()
         sm_filaments = await smc.list_filaments()
         sm_vendors_list = await smc.list_vendors()
+
+        # Filament-Types von SimplyPrint laden für bessere Material-Daten
+        sp_types_resp = await spc.get_filament_types()
+        sp_types = sp_types_resp.get("types", {}) if isinstance(sp_types_resp, dict) else {}
+        logger.info(f"SimplyPrint: {len(sp_types)} Filament-Types geladen")
+
     except Exception as e:
         logger.error(f"Fehler beim Laden der Daten: {e}", exc_info=True)
         return
@@ -463,18 +671,91 @@ async def run_sync_once():
     success_count = 0
     error_count = 0
 
+    # UIDs die in SimplyPrint vorhanden sind
+    sp_uids = {sp_fil.get("uid") for sp_fil in sp_filaments if isinstance(sp_fil, dict) and sp_fil.get("uid")}
+
     with get_session() as session:
         for sp_filament in sp_filaments:
             if not isinstance(sp_filament, dict):
                 logger.warning(f"Überspringe ungültigen Eintrag: {type(sp_filament)}")
                 continue
 
-            if await sync_single_filament(smc, sp_filament, lot_map, sm_filaments, sm_vendors, session):
+            if await sync_single_filament(smc, spc, sp_filament, lot_map, sm_filaments, sm_vendors, session, sp_types, last_sync_time):
                 success_count += 1
             else:
                 error_count += 1
 
+    # 3) Spulen in Spoolman verwalten, die nicht mehr in SimplyPrint existieren
+    await cleanup_deleted_spools(smc, lot_map, sp_uids)
+
+    # 4) Sync-Timestamp speichern für nächsten Lauf
+    S.set("LAST_SYNC_TIME", str(sync_start_time))
+
     logger.info(f"=== Sync abgeschlossen: {success_count} erfolgreich, {error_count} Fehler ===")
+
+
+async def cleanup_deleted_spools(
+    smc: SpoolmanClient,
+    lot_map: Dict[str, Any],
+    sp_uids: set
+):
+    """
+    Verwaltet Spulen in Spoolman, die nicht mehr in SimplyPrint existieren.
+
+    - Wenn used_weight > 0: Archivieren (wurde benutzt)
+    - Wenn used_weight == 0: Löschen (nie benutzt)
+    """
+    deleted_count = 0
+    archived_count = 0
+
+    for lot_nr, sm_spool in lot_map.items():
+        # Überspringe wenn noch in SimplyPrint vorhanden
+        if lot_nr in sp_uids:
+            continue
+
+        # Überspringe bereits archivierte
+        if sm_spool.get("archived"):
+            continue
+
+        spool_id = sm_spool.get("id")
+        used_weight = float(sm_spool.get("used_weight") or 0)
+
+        if S.get("DRY_RUN", "false") == "true":
+            action = "archivieren" if used_weight > 0 else "löschen"
+            logger.info(f"[DRY-RUN] Würde Spule {spool_id} (lot_nr={lot_nr}) {action} (used_weight={used_weight}g)")
+            continue
+
+        try:
+            if used_weight > 0:
+                # Archivieren wenn benutzt
+                # Filament-ID extrahieren
+                sm_filament_id = (
+                    sm_spool.get("filament", {}).get("id")
+                    if isinstance(sm_spool.get("filament"), dict)
+                    else sm_spool.get("filament_id")
+                )
+
+                await smc.update_spool(spool_id, {
+                    "filament_id": sm_filament_id,
+                    "price": sm_spool.get("price"),
+                    "spool_weight": sm_spool.get("spool_weight"),
+                    "archived": True,
+                    "lot_nr": sm_spool.get("lot_nr"),
+                    "used_weight": sm_spool.get("used_weight"),
+                })
+                logger.info(f"Spule archiviert: {spool_id} (lot_nr={lot_nr}, used_weight={used_weight}g)")
+                archived_count += 1
+            else:
+                # Löschen wenn nie benutzt
+                await smc.delete_spool(spool_id)
+                logger.info(f"Spule gelöscht: {spool_id} (lot_nr={lot_nr}, used_weight={used_weight}g)")
+                deleted_count += 1
+
+        except Exception as e:
+            logger.error(f"Fehler beim Verwalten von Spule {spool_id} (lot_nr={lot_nr}): {e}")
+
+    if archived_count > 0 or deleted_count > 0:
+        logger.info(f"Cleanup: {archived_count} archiviert, {deleted_count} gelöscht")
 
 
 def start_scheduler():
