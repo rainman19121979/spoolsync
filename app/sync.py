@@ -84,27 +84,57 @@ def calculate_weight_from_length(
     return round((length_mm / 1000.0) * gpm, 2)
 
 
+def extract_material_type(type_field: Any) -> str:
+    """
+    Extrahiert den reinen Material-Typ aus dem SimplyPrint type-Feld.
+    Entfernt Hersteller-Präfixe wie "JAYO PETG" -> "PETG"
+    """
+    if isinstance(type_field, dict):
+        material = type_field.get("name", "Unknown")
+    else:
+        material = str(type_field) if type_field else "Unknown"
+
+    # Liste bekannter Material-Typen
+    known_materials = ["PLA", "PETG", "ABS", "TPU", "NYLON", "ASA", "PC", "PP", "PVA", "HIPS"]
+
+    # Suche nach bekanntem Material-Typ im String (case-insensitive)
+    material_upper = material.upper()
+    for mat in known_materials:
+        if mat in material_upper:
+            return mat
+
+    # Fallback: Wenn kein bekanntes Material gefunden, versuche letztes Wort zu nehmen
+    words = material.split()
+    if len(words) > 1:
+        last_word = words[-1].upper()
+        # Prüfe ob letztes Wort ein Material sein könnte (3-5 Buchstaben)
+        if 2 <= len(last_word) <= 6:
+            return last_word
+
+    return material
+
+
 def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
     """
     Extrahiert und normalisiert Filament-Daten aus SimplyPrint.
 
     SimplyPrint API Struktur:
     - uid: 4-Zeichen Code (z.B. "PL23")
-    - type: {id: int, name: str} oder einfach string
+    - type: {id: int, name: str} oder einfach string (kann "JAYO PETG" enthalten)
     - dia: Durchmesser (diameter)
     - density: Dichte
     - total: Gesamtlänge in mm
     - left: Verbleibende Länge in mm
+    - spoolWeight: Gewicht der leeren Spule in Gramm
     """
-    # Type kann ein Objekt oder String sein
-    material_type = sp_filament.get("type")
-    if isinstance(material_type, dict):
-        material = material_type.get("name", "Unknown")
-    else:
-        material = str(material_type) if material_type else "Unknown"
+    # Material-Typ extrahieren (nur PLA/PETG/etc., ohne Hersteller)
+    material = extract_material_type(sp_filament.get("type"))
 
     # Brand extrahieren
     brand = sp_filament.get("brand", "Unknown")
+
+    # Spulengewicht (leer)
+    spool_weight = sp_filament.get("spoolWeight") or sp_filament.get("spool_weight")
 
     return {
         "uid": sp_filament.get("uid"),  # 4-Zeichen Code
@@ -114,9 +144,10 @@ def extract_filament_data(sp_filament: Dict[str, Any]) -> Dict[str, Any]:
         "diameter_mm": float(sp_filament.get("dia", 1.75)),
         "density_g_cm3": float(sp_filament.get("density", 1.24)),
         "color_hex": normalize_color(sp_filament.get("colorHex")),
-        "nominal_weight_g": None,  # SimplyPrint hat kein Gewicht direkt
+        "nominal_weight_g": None,  # SimplyPrint hat kein direktes Filament-Gewicht
         "total_length_mm": sp_filament.get("total"),  # Gesamtlänge in mm
         "left_length_mm": sp_filament.get("left"),   # Verbleibend in mm
+        "spool_weight_g": float(spool_weight) if spool_weight else 250.0,  # Gewicht der leeren Spule
     }
 
 
@@ -203,6 +234,15 @@ async def ensure_spoolman_spool(
             if filament_data["color_hex"]:
                 sm_fil_payload["color_hex"] = filament_data["color_hex"]
 
+            # Gewicht: Berechne aus total_length wenn vorhanden
+            if filament_data.get("total_length_mm"):
+                weight = calculate_weight_from_length(
+                    filament_data["total_length_mm"],
+                    filament_data["density_g_cm3"],
+                    filament_data["diameter_mm"]
+                )
+                sm_fil_payload["weight"] = weight
+
             sm_fil = await smc.create_filament(sm_fil_payload)
             logger.info(f"Filament erstellt in Spoolman: {sm_fil.get('id')} - {filament_data['name']}")
             # Zur Liste hinzufügen für zukünftige Matches
@@ -221,7 +261,7 @@ async def ensure_spoolman_spool(
         sm_spool = await smc.create_spool({
             "filament_id": sm_fil.get("id"),
             "lot_nr": uid,
-            "spool_weight": 250,  # Standard Spulengewicht (leer)
+            "spool_weight": filament_data.get("spool_weight_g", 250.0),  # Spulengewicht von SimplyPrint
             "initial_weight": total_weight,  # Gesamtgewicht des Filaments
             "price": 0,
             "used_weight": 0,
@@ -229,6 +269,7 @@ async def ensure_spoolman_spool(
         })
         logger.info(
             f"Spule erstellt in Spoolman: {sm_spool.get('id')} (lot_nr={uid}, "
+            f"spool_weight={filament_data.get('spool_weight_g', 250.0)}g, "
             f"initial_weight={total_weight}g)"
         )
         return sm_spool
