@@ -77,7 +77,7 @@ def find_matching_filament(
     filament_data: Dict[str, Any]
 ) -> Optional[Dict[str, Any]]:
     """
-    Sucht nach einem passenden Filament in Spoolman basierend auf Material, Durchmesser und Marke.
+    Sucht nach einem passenden Filament in Spoolman basierend auf Material, Durchmesser, Marke UND Farbe.
     """
     for sm_fil in sm_filaments:
         # Vergleiche Material, Durchmesser und Marke
@@ -99,7 +99,18 @@ def find_matching_filament(
             sm_vendor_name.lower() == filament_data.get("brand", "").lower()
         )
 
-        if material_match and diameter_match and vendor_match:
+        # Farbe vergleichen (wichtig für verschiedene Farben desselben Materials!)
+        color_match = True  # Default: Farbe nicht prüfen wenn nicht vorhanden
+        if filament_data.get("color_hex") and sm_fil.get("color_hex"):
+            # Beide haben Farbe → vergleichen
+            color_match = (
+                sm_fil.get("color_hex", "").lower() == filament_data.get("color_hex", "").lower()
+            )
+        elif filament_data.get("color_hex") or sm_fil.get("color_hex"):
+            # Nur einer hat Farbe → kein Match
+            color_match = False
+
+        if material_match and diameter_match and vendor_match and color_match:
             return sm_fil
 
     return None
