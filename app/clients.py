@@ -228,15 +228,24 @@ class SimplyPrintClient:
         async with httpx.AsyncClient(timeout=30, headers=self.headers) as c:
             url = f"{self.base}/filament/Create?fid={filament_id}"
             logger.debug(f"Aktualisiere Filament bei: {url}")
-            
+
             r = await c.post(url, json=payload)
+
+            # Bei Fehler: Zeige Response-Body für Debugging
+            if r.status_code != 200:
+                try:
+                    error_data = r.json()
+                    logger.error(f"SimplyPrint API Error Response: {error_data}")
+                except:
+                    logger.error(f"SimplyPrint API Error Response (raw): {r.text}")
+
             r.raise_for_status()
             data = r.json()
-            
+
             if not data.get("status"):
                 error_msg = data.get("message", "Unbekannter Fehler")
                 raise Exception(f"SimplyPrint API Fehler: {error_msg}")
-            
+
             return data
     
     async def test_connection(self):
