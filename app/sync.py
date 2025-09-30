@@ -164,6 +164,9 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         else:
             payload["filament_type"] = str(sp_type) if sp_type else "PLA"
 
+        # Debug: Zeige kompletten Payload
+        logger.debug(f"SimplyPrint Update Payload für {uid} (ID: {filament_id}): {payload}")
+
         # Verwende die numerische ID für das Update
         await spc.update_filament(str(filament_id), payload)
         logger.debug(f"SimplyPrint Filament {uid} (ID: {filament_id}) aktualisiert: left={payload['left']}mm")
