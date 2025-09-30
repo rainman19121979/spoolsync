@@ -35,6 +35,12 @@ chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 echo ">>> venv…"
 sudo -u "$APP_USER" python3 -m venv "$APP_DIR/.venv"
+
+# pip Cache-Verzeichnis für User erstellen
+CACHE_DIR="/home/$APP_USER/.cache/pip"
+mkdir -p "$CACHE_DIR"
+chown -R "$APP_USER:$APP_USER" "$CACHE_DIR"
+
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install --upgrade pip
 sudo -u "$APP_USER" "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
 
