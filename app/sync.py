@@ -239,10 +239,11 @@ def extract_filament_data(sp_filament: Dict[str, Any], sp_types: Dict[str, Any] 
         sp_types: Optional - Filament-Types Dictionary aus GET /{id}/filament/type/Get
     """
     # Material-Typ extrahieren (nur PLA/PETG/etc., ohne Hersteller)
+    # WICHTIG: Wird später aus Type API überschrieben falls verfügbar!
     material = extract_material_type(sp_filament.get("type"))
 
-    # Brand extrahieren
-    brand = sp_filament.get("brand", "Unknown")
+    # Brand extrahieren (priorisiere Filament-Brand)
+    brand = sp_filament.get("brand", "").strip() or "Unknown"
 
     # Durchmesser und Dichte - erst aus Filament, dann aus Type
     diameter_mm = float(sp_filament.get("dia", 1.75))
@@ -260,14 +261,29 @@ def extract_filament_data(sp_filament: Dict[str, Any], sp_types: Dict[str, Any] 
 
         if type_id and str(type_id) in sp_types:
             type_data = sp_types[str(type_id)]
+
+            # Material-Typ aus Type API verwenden (das ist das sauberste!)
+            if type_data.get("material_type_name"):
+                material = type_data["material_type_name"]
+                logger.debug(f"Material aus Type API: {material}")
+            elif type_data.get("filament_type_name"):
+                material = type_data["filament_type_name"]
+                logger.debug(f"Material aus Type API (legacy): {material}")
+
             # Überschreibe mit Werten aus Type, falls vorhanden
             if type_data.get("density"):
                 density_g_cm3 = float(type_data["density"])
-            if type_data.get("diameter") or type_data.get("dia"):
+            if type_data.get("width"):
+                diameter_mm = float(type_data["width"])
+            elif type_data.get("diameter") or type_data.get("dia"):
                 diameter_mm = float(type_data.get("diameter") or type_data.get("dia", diameter_mm))
+
             # Brand aus Type verwenden wenn im Filament nicht gesetzt
             if brand == "Unknown" and type_data.get("brand"):
-                brand = type_data["brand"]
+                if isinstance(type_data["brand"], dict):
+                    brand = type_data["brand"].get("name", "Unknown")
+                else:
+                    brand = type_data["brand"]
 
     # Spulengewicht (leer)
     spool_weight = sp_filament.get("spoolWeight") or sp_filament.get("spool_weight")
@@ -649,7 +665,17 @@ async def run_sync_once():
 
         # Filament-Types von SimplyPrint laden für bessere Material-Daten
         sp_types_resp = await spc.get_filament_types()
-        sp_types = sp_types_resp.get("types", {}) if isinstance(sp_types_resp, dict) else {}
+
+        # Response kann "data" oder "types" enthalten, als Array oder Dict
+        sp_types = {}
+        if isinstance(sp_types_resp, dict):
+            types_list = sp_types_resp.get("data") or sp_types_resp.get("types")
+            if isinstance(types_list, list):
+                # Array zu Dictionary konvertieren (id -> type_data)
+                sp_types = {str(t.get("id")): t for t in types_list if isinstance(t, dict) and t.get("id")}
+            elif isinstance(types_list, dict):
+                sp_types = types_list
+
         logger.info(f"SimplyPrint: {len(sp_types)} Filament-Types geladen")
 
     except Exception as e:
