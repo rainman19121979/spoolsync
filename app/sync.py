@@ -157,12 +157,14 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
             "brand": sp_filament.get("brand", ""),
         }
 
-        # Material Type
+        # Material Type - verwende die Type ID statt dem Namen
         sp_type = sp_filament.get("type", {})
-        if isinstance(sp_type, dict):
-            payload["filament_type"] = sp_type.get("name", "PLA")
+        if isinstance(sp_type, dict) and sp_type.get("id"):
+            payload["type"] = int(sp_type.get("id"))  # Numerische Type ID
         else:
-            payload["filament_type"] = str(sp_type) if sp_type else "PLA"
+            # Fallback: Verwende "PLA" als String (wird aber wahrscheinlich nicht funktionieren)
+            logger.warning(f"Keine Type ID gefunden für {uid}, verwende Fallback")
+            payload["type"] = sp_filament.get("type") if sp_filament.get("type") else "PLA"
 
         # Debug: Zeige kompletten Payload
         logger.debug(f"SimplyPrint Update Payload für {uid} (ID: {filament_id}): {payload}")
