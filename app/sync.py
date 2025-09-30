@@ -9,7 +9,7 @@ from .clients import SpoolmanClient, SimplyPrintClient
 from . import settings as S
 
 # Logging konfigurieren
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 _scheduler = None
@@ -164,27 +164,47 @@ def extract_material_type(type_field: Any) -> str:
     """
     Extrahiert den reinen Material-Typ aus dem SimplyPrint type-Feld.
     Entfernt Hersteller-Präfixe wie "JAYO PETG" -> "PETG"
+    Behält Varianten wie "PLA+", "PETG-CF" etc.
     """
     if isinstance(type_field, dict):
         material = type_field.get("name", "Unknown")
     else:
         material = str(type_field) if type_field else "Unknown"
 
-    # Liste bekannter Material-Typen
-    known_materials = ["PLA", "PETG", "ABS", "TPU", "NYLON", "ASA", "PC", "PP", "PVA", "HIPS"]
-
-    # Suche nach bekanntem Material-Typ im String (case-insensitive)
+    material = material.strip()
     material_upper = material.upper()
+
+    # Liste bekannter Material-Typen mit Varianten (längere zuerst!)
+    known_materials = [
+        "PLA+", "PETG-CF", "PLA-CF", "ABS+", "TPU-95A", "TPU-98A",
+        "PETG", "PLA", "ABS", "TPU", "NYLON", "ASA", "PC", "PP", "PVA", "HIPS"
+    ]
+
+    # Suche nach bekanntem Material-Typ im String (längere Matches haben Priorität)
     for mat in known_materials:
-        if mat in material_upper:
+        # Exakte Übereinstimmung (mit oder ohne Hersteller-Präfix)
+        if material_upper == mat:
             return mat
 
-    # Fallback: Wenn kein bekanntes Material gefunden, versuche letztes Wort zu nehmen
+        # Material am Ende (z.B. "JAYO PLA+")
+        if material_upper.endswith(" " + mat):
+            return mat
+
+        # Material am Anfang (z.B. "PLA+ Natural")
+        if material_upper.startswith(mat + " "):
+            return mat
+
+        # Material alleine in Wort-Liste
+        words = material_upper.split()
+        if mat in words:
+            return mat
+
+    # Fallback: Wenn kein bekanntes Material gefunden, nimm das letzte Wort
     words = material.split()
     if len(words) > 1:
-        last_word = words[-1].upper()
-        # Prüfe ob letztes Wort ein Material sein könnte (3-5 Buchstaben)
-        if 2 <= len(last_word) <= 6:
+        last_word = words[-1]
+        # Behalte original Schreibweise für unbekannte Materialien
+        if 2 <= len(last_word) <= 10:
             return last_word
 
     return material
@@ -642,6 +662,10 @@ async def run_sync_once():
     # Dictionary zu Liste umwandeln
     sp_filaments = list(sp_filaments_dict.values())
     logger.info(f"SimplyPrint: {len(sp_filaments)} Filamente gefunden")
+
+    # Debug: Liste alle UIDs auf
+    sp_uids_found = [f.get("uid") for f in sp_filaments if isinstance(f, dict)]
+    logger.debug(f"SimplyPrint UIDs: {sp_uids_found}")
 
     # Spoolman lot_nr Map erstellen
     lot_map: Dict[str, Dict[str, Any]] = {}

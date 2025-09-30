@@ -56,7 +56,7 @@ class SpoolmanClient:
     async def update_spool(self, spool_id, payload):
         """Aktualisiert eine Spule."""
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.put(f"{self.base}/spool/{spool_id}", json=payload)
+            r = await c.patch(f"{self.base}/spool/{spool_id}", json=payload)
             r.raise_for_status()
             return r.json()
 
