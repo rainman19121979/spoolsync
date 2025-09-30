@@ -536,6 +536,11 @@ async def calculate_and_sync_usage(
                 if S.get("DRY_RUN", "false") != "true":
                     await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm)
                     logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_length_mm:.0f}mm verbleibend")
+
+                    # WICHTIG: Speichere den Spoolman-Wert und verhindere Überschreiben für die nächsten paar Syncs
+                    # Setze einen "letzten bidirektionalen Sync" Timestamp für diese Spule
+                    S.set(f"BIDIRECTIONAL_SYNC_{filament_data['uid']}", str(time.time()))
+                    logger.debug(f"Bidirektionaler Sync markiert für lot_nr={filament_data['uid']}")
                 else:
                     logger.info(f"[DRY-RUN] Würde SimplyPrint aktualisieren: {remaining_length_mm:.0f}mm verbleibend")
 
@@ -545,6 +550,26 @@ async def calculate_and_sync_usage(
             logger.warning(f"Fehler beim Timestamp-Vergleich für lot_nr={filament_data['uid']}: {e}")
 
     # Normal: SimplyPrint → Spoolman
+    # ABER: Prüfe erst ob kürzlich ein bidirektionaler Sync stattfand (Grace Period: 5 Minuten)
+    bidirect_sync_time_str = S.get(f"BIDIRECTIONAL_SYNC_{filament_data['uid']}")
+    if bidirect_sync_time_str:
+        try:
+            bidirect_sync_time = float(bidirect_sync_time_str)
+            grace_period = 300  # 5 Minuten in Sekunden
+            if time.time() - bidirect_sync_time < grace_period:
+                # Innerhalb der Grace Period: Spoolman-Wert beibehalten, nicht überschreiben
+                logger.info(
+                    f"Innerhalb Grace Period nach bidirektionalem Sync für lot_nr={filament_data['uid']} - "
+                    f"behalte Spoolman-Wert {cur_used}g (SimplyPrint: {used_g}g)"
+                )
+                return cur_used
+            else:
+                # Grace Period vorbei: Marker löschen
+                S.set(f"BIDIRECTIONAL_SYNC_{filament_data['uid']}", "")
+                logger.debug(f"Grace Period abgelaufen für lot_nr={filament_data['uid']}")
+        except (ValueError, TypeError):
+            pass
+
     # Prüfen ob Update nötig ist
     if abs(used_g - cur_used) <= EPS():
         logger.debug(f"Kein Update nötig für lot_nr={filament_data['uid']} (Δ={abs(used_g - cur_used):.2f}g)")
