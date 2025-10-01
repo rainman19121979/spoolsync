@@ -159,8 +159,6 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
 
         payload = {
             "left": remaining_length,  # Verbleibende Länge in mm
-            "total_length": total_length,  # Gesamtlänge in mm
-            "total_length_type": "m",  # Typ für total_length (mm = meters)
             "length_used": length_used_percent,  # Prozent verbleibend (vertauschte Semantik!)
             "left_length_type": "percent",  # Typ für length_used
             "color_name": sp_filament.get("colorName", ""),
