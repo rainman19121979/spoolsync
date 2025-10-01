@@ -323,12 +323,62 @@ def extract_filament_data(sp_filament: Dict[str, Any], sp_types: Dict[str, Any] 
             last_used = sp_filament.get(field)
             break
 
-    # Name ohne Brand (wird in Spoolman als separates Feld gespeichert)
+    # Name: profile_name aus Type API + Farbe
+    profile_name = None
+
+    # Hole profile_name aus Type API
+    if sp_types:
+        type_obj = sp_filament.get("type")
+        type_id = None
+
+        if isinstance(type_obj, dict):
+            type_id = type_obj.get("id")
+        elif isinstance(type_obj, int):
+            type_id = type_obj
+
+        if type_id and str(type_id) in sp_types:
+            type_data = sp_types[str(type_id)]
+            if type_data.get("profile_name"):
+                profile_name = type_data["profile_name"]
+                logger.debug(f"profile_name aus Type API: {profile_name}")
+
+    # Name = profile_name + Farbe (oder Fallback auf Material + Farbe)
     color_name = sp_filament.get('colorName', '').strip()
+    base_name = profile_name if profile_name else material
+
     if color_name:
-        name = f"{material} {color_name}"
+        name = f"{base_name} {color_name}"
     else:
-        name = material
+        name = base_name
+
+    # Temperaturen und Kosten aus Type API extrahieren
+    extruder_temp = None
+    bed_temp = None
+    cost = None
+
+    if sp_types:
+        type_obj = sp_filament.get("type")
+        type_id = None
+
+        if isinstance(type_obj, dict):
+            type_id = type_obj.get("id")
+        elif isinstance(type_obj, int):
+            type_id = type_obj
+
+        if type_id and str(type_id) in sp_types:
+            type_data = sp_types[str(type_id)]
+
+            # Temperaturen aus temps-Objekt
+            if type_data.get("temps"):
+                temps = type_data["temps"]
+                if temps.get("nozzle"):
+                    extruder_temp = int(temps["nozzle"])
+                if temps.get("bed"):
+                    bed_temp = int(temps["bed"])
+
+            # Kosten (in SimplyPrint in Cent, zu Euro konvertieren)
+            if type_data.get("cost"):
+                cost = float(type_data["cost"]) / 100.0
 
     return {
         "uid": sp_filament.get("uid"),  # 4-Zeichen Code
@@ -343,6 +393,9 @@ def extract_filament_data(sp_filament: Dict[str, Any], sp_types: Dict[str, Any] 
         "left_length_mm": sp_filament.get("left"),   # Verbleibend in mm
         "spool_weight_g": float(spool_weight) if spool_weight else None,  # Gewicht der leeren Spule oder None
         "last_used": last_used,  # Zuletzt benutzt Timestamp
+        "extruder_temp": extruder_temp,  # Düsentemperatur
+        "bed_temp": bed_temp,  # Betttemperatur
+        "cost": cost,  # Kosten in Euro
     }
 
 
@@ -428,6 +481,16 @@ async def ensure_spoolman_spool(
                 sm_fil_payload["vendor_id"] = vendor_id
             if filament_data["color_hex"]:
                 sm_fil_payload["color_hex"] = filament_data["color_hex"]
+
+            # Temperaturen aus SimplyPrint Type API
+            if filament_data.get("extruder_temp"):
+                sm_fil_payload["settings_extruder_temp"] = filament_data["extruder_temp"]
+            if filament_data.get("bed_temp"):
+                sm_fil_payload["settings_bed_temp"] = filament_data["bed_temp"]
+
+            # Kosten aus SimplyPrint Type API
+            if filament_data.get("cost"):
+                sm_fil_payload["price"] = filament_data["cost"]
 
             # Gewicht: Berechne aus total_length wenn vorhanden und runde auf Standard-Gewicht
             if filament_data.get("total_length_mm"):
