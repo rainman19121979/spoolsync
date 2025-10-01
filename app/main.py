@@ -47,7 +47,7 @@ def health():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, db=Depends(get_db)):
+async def dashboard(request: Request):
     # Hole Live-Daten von Spoolman für korrekte Statistiken
     try:
         smc = SpoolmanClient()
@@ -57,41 +57,54 @@ async def dashboard(request: Request, db=Depends(get_db)):
         active_count = sum(1 for s in spoolman_spools if not s.get("archived", False))
         archived_count = sum(1 for s in spoolman_spools if s.get("archived", False))
         total_used = sum(s.get("used_weight", 0) for s in spoolman_spools)
+        total_spools = len(spoolman_spools)
+        spoolman_ok = True
     except:
-        # Fallback auf Cache bei Fehler
-        active_count = db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 0").fetchone()["count"]
-        archived_count = db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 1").fetchone()["count"]
-        total_used = db.execute("SELECT COALESCE(SUM(used_weight_g), 0) as total FROM spool").fetchone()["total"]
+        # Fallback: Wird später aus DB geholt
+        spoolman_ok = False
+        active_count = 0
+        archived_count = 0
+        total_used = 0
+        total_spools = 0
 
-    # Filamente aus Cache (für Performance)
-    filaments = db.execute(
-        "SELECT id, name, brand, material, diameter_mm, density_g_cm3, color_hex, created_at, updated_at "
-        "FROM filament "
-        "ORDER BY updated_at DESC LIMIT 50"
-    ).fetchall()
+    # Hole DB-Daten NACH dem await (neuer Thread-Context)
+    with get_session() as db:
+        # Filamente aus Cache (für Performance)
+        filaments = db.execute(
+            "SELECT id, name, brand, material, diameter_mm, density_g_cm3, color_hex, created_at, updated_at "
+            "FROM filament "
+            "ORDER BY updated_at DESC LIMIT 50"
+        ).fetchall()
 
-    # Spulen aus Cache (für Performance)
-    spools = db.execute(
-        """
-        SELECT
-            s.id, s.lot_nr, s.used_weight_g, s.spool_weight_g,
-            s.price_eur, s.archived, s.source, s.created_at, s.updated_at,
-            f.name as filament_name, f.brand, f.material, f.color_hex
-        FROM spool s
-        LEFT JOIN filament f ON s.filament_id = f.id
-        ORDER BY s.updated_at DESC LIMIT 50
-        """
-    ).fetchall()
+        # Spulen aus Cache (für Performance)
+        spools = db.execute(
+            """
+            SELECT
+                s.id, s.lot_nr, s.used_weight_g, s.spool_weight_g,
+                s.price_eur, s.archived, s.source, s.created_at, s.updated_at,
+                f.name as filament_name, f.brand, f.material, f.color_hex
+            FROM spool s
+            LEFT JOIN filament f ON s.filament_id = f.id
+            ORDER BY s.updated_at DESC LIMIT 50
+            """
+        ).fetchall()
 
-    # Statistiken mit Live-Daten von Spoolman
-    stats = {
-        "total_filaments": db.execute("SELECT COUNT(*) as count FROM filament").fetchone()["count"],
-        "total_spools": len(spoolman_spools) if 'spoolman_spools' in locals() else db.execute("SELECT COUNT(*) as count FROM spool").fetchone()["count"],
-        "active_spools": active_count,
-        "archived_spools": archived_count,
-        "total_used_weight": total_used,
-        "last_sync": S.get("LAST_SYNC_TIME", "0"),
-    }
+        # Fallback auf Cache wenn Spoolman nicht erreichbar
+        if not spoolman_ok:
+            active_count = db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 0").fetchone()["count"]
+            archived_count = db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 1").fetchone()["count"]
+            total_used = db.execute("SELECT COALESCE(SUM(used_weight_g), 0) as total FROM spool").fetchone()["total"]
+            total_spools = db.execute("SELECT COUNT(*) as count FROM spool").fetchone()["count"]
+
+        # Statistiken mit Live-Daten von Spoolman (oder Fallback Cache)
+        stats = {
+            "total_filaments": db.execute("SELECT COUNT(*) as count FROM filament").fetchone()["count"],
+            "total_spools": total_spools,
+            "active_spools": active_count,
+            "archived_spools": archived_count,
+            "total_used_weight": total_used,
+            "last_sync": S.get("LAST_SYNC_TIME", "0"),
+        }
 
     return templates.TemplateResponse(
         "dashboard.html",
