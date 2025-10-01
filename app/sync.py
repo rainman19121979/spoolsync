@@ -147,9 +147,21 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         # SimplyPrint Create/Update Endpoint benötigt ALLE Felder, nicht nur "left"
         # Wir müssen das existierende Filament mit dem neuen "left" Wert überschreiben
 
+        # Berechne Prozent verbleibend (laut Discord: length_used ist semantisch vertauscht)
+        total_length = int(sp_filament.get("total", 0))
+        remaining_length = max(0, int(remaining_length_mm))
+
+        # length_used als Prozent verbleibend (nicht verbraucht!)
+        if total_length > 0:
+            length_used_percent = round((remaining_length / total_length) * 100, 2)
+        else:
+            length_used_percent = 0
+
         payload = {
-            "left": max(0, int(remaining_length_mm)),  # Neuer Wert
-            "total_length": int(sp_filament.get("total", 0)),  # Muss vorhanden sein
+            "left": remaining_length,  # Verbleibende Länge in mm
+            "total_length": total_length,  # Gesamtlänge
+            "length_used": length_used_percent,  # Prozent verbleibend (vertauschte Semantik!)
+            "left_length_type": "percent",  # Typ für length_used
             "color_name": sp_filament.get("colorName", ""),
             "color_hex": sp_filament.get("colorHex", "#FFFFFF"),
             "width": float(sp_filament.get("dia", 1.75)),
@@ -172,7 +184,7 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
 
         # Verwende die numerische ID für das Update
         await spc.update_filament(str(filament_id), payload)
-        logger.debug(f"SimplyPrint Filament {uid} (ID: {filament_id}) aktualisiert: left={payload['left']}mm")
+        logger.info(f"SimplyPrint Filament {uid} (ID: {filament_id}) aktualisiert: left={payload['left']}mm ({length_used_percent}%)")
     except Exception as e:
         logger.error(f"Fehler beim Aktualisieren von SimplyPrint Filament {uid}: {e}")
 
