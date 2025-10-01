@@ -12,9 +12,9 @@ class SpoolmanClient:
         self.base = S.get("SPOOLMAN_BASE").rstrip('/')
 
     async def list_spools(self):
-        """Listet alle Spulen auf."""
+        """Listet alle Spulen auf (inkl. archivierte)."""
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(f"{self.base}/spool")
+            r = await c.get(f"{self.base}/spool?allow_archived=true")
             r.raise_for_status()
             return r.json()
 
