@@ -47,15 +47,30 @@ def health():
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, db=Depends(get_db)):
-    # Filamente mit mehr Details
+async def dashboard(request: Request, db=Depends(get_db)):
+    # Hole Live-Daten von Spoolman für korrekte Statistiken
+    try:
+        smc = SpoolmanClient()
+        spoolman_spools = await smc.list_spools()
+
+        # Zähle aktive und archivierte Spulen direkt von Spoolman
+        active_count = sum(1 for s in spoolman_spools if not s.get("archived", False))
+        archived_count = sum(1 for s in spoolman_spools if s.get("archived", False))
+        total_used = sum(s.get("used_weight", 0) for s in spoolman_spools)
+    except:
+        # Fallback auf Cache bei Fehler
+        active_count = db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 0").fetchone()["count"]
+        archived_count = db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 1").fetchone()["count"]
+        total_used = db.execute("SELECT COALESCE(SUM(used_weight_g), 0) as total FROM spool").fetchone()["total"]
+
+    # Filamente aus Cache (für Performance)
     filaments = db.execute(
         "SELECT id, name, brand, material, diameter_mm, density_g_cm3, color_hex, created_at, updated_at "
         "FROM filament "
         "ORDER BY updated_at DESC LIMIT 50"
     ).fetchall()
 
-    # Spulen mit Filament-Namen und mehr Details
+    # Spulen aus Cache (für Performance)
     spools = db.execute(
         """
         SELECT
@@ -68,13 +83,13 @@ def dashboard(request: Request, db=Depends(get_db)):
         """
     ).fetchall()
 
-    # Statistiken berechnen
+    # Statistiken mit Live-Daten von Spoolman
     stats = {
         "total_filaments": db.execute("SELECT COUNT(*) as count FROM filament").fetchone()["count"],
-        "total_spools": db.execute("SELECT COUNT(*) as count FROM spool").fetchone()["count"],
-        "active_spools": db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 0").fetchone()["count"],
-        "archived_spools": db.execute("SELECT COUNT(*) as count FROM spool WHERE archived = 1").fetchone()["count"],
-        "total_used_weight": db.execute("SELECT COALESCE(SUM(used_weight_g), 0) as total FROM spool").fetchone()["total"],
+        "total_spools": len(spoolman_spools) if 'spoolman_spools' in locals() else db.execute("SELECT COUNT(*) as count FROM spool").fetchone()["count"],
+        "active_spools": active_count,
+        "archived_spools": archived_count,
+        "total_used_weight": total_used,
         "last_sync": S.get("LAST_SYNC_TIME", "0"),
     }
 

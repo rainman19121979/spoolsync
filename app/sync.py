@@ -946,7 +946,7 @@ async def cleanup_deleted_spools(
                     else sm_spool.get("filament_id")
                 )
 
-                await smc.update_spool(spool_id, {
+                result = await smc.update_spool(spool_id, {
                     "filament_id": sm_filament_id,
                     "price": sm_spool.get("price"),
                     "spool_weight": sm_spool.get("spool_weight"),
@@ -955,6 +955,7 @@ async def cleanup_deleted_spools(
                     "used_weight": sm_spool.get("used_weight"),
                 })
                 logger.info(f"Spule archiviert: {spool_id} (lot_nr={lot_nr}, used_weight={used_weight}g)")
+                logger.debug(f"Spoolman Archive Response: {result}")
                 archived_count += 1
             else:
                 # Löschen wenn nie benutzt
