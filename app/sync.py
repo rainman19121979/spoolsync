@@ -157,23 +157,15 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         else:
             length_used_percent = 0
 
-        # Konvertiere mm zu kg (SimplyPrint API erwartetkg für total_length_type)
-        # Gewicht = Länge(mm) / 1000 * π * (d/2)² * Dichte
-        diameter_mm = float(sp_filament.get("dia", 1.75))
-        density = float(sp_filament.get("density", 1.24))
-        remaining_kg = (remaining_length / 1000) * 3.14159 * ((diameter_mm / 2) ** 2) * density / 1000
-        total_kg = (total_length / 1000) * 3.14159 * ((diameter_mm / 2) ** 2) * density / 1000
-
+        # SimplyPrint API: "length_used" ist semantisch falsch - es bedeutet "length_LEFT" (verbleibend)!
+        # Quelle: Discord @Javad "it's inverted, we use length_used as a length_left"
         payload = {
-            "left": remaining_kg,  # Verbleibende Menge in kg
-            "total_length": total_kg,  # Gesamt-Menge in kg
-            "total_length_type": "kg",  # SimplyPrint erwartet "kg"
-            "length_used": length_used_percent,  # Prozent verbleibend (vertauschte Semantik!)
-            "left_length_type": "percent",  # Typ für length_used
+            "length_used": length_used_percent,  # Prozent VERBLEIBEND (nicht verbraucht!)
+            "left_length_type": "percent",  # WICHTIG: Muss mit length_used gesendet werden
             "color_name": sp_filament.get("colorName", ""),
             "color_hex": sp_filament.get("colorHex", "#FFFFFF"),
-            "width": diameter_mm,
-            "density": density,
+            "width": float(sp_filament.get("dia", 1.75)),
+            "density": float(sp_filament.get("density", 1.24)),
             "brand": sp_filament.get("brand", ""),
         }
 
