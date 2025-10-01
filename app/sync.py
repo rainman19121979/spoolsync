@@ -182,8 +182,17 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         logger.debug(f"SimplyPrint Update Payload für {uid} (ID: {filament_id}): {payload}")
 
         # Verwende die numerische ID für das Update
-        await spc.update_filament(str(filament_id), payload)
+        result = await spc.update_filament(str(filament_id), payload)
         logger.info(f"SimplyPrint Filament {uid} (ID: {filament_id}) aktualisiert: left={payload['left']}mm ({length_used_percent}%)")
+        logger.debug(f"SimplyPrint API Response: {result}")
+
+        # Verifiziere, ob der Wert wirklich gespeichert wurde
+        verification = await spc.list_filaments()
+        if verification and "filament" in verification:
+            for fil_data in verification["filament"].values():
+                if fil_data.get("uid") == uid:
+                    logger.info(f"Verifikation nach Update für {uid}: left={fil_data.get('left')}mm, total={fil_data.get('total')}mm, percentage={fil_data.get('percentage', 0)}%")
+                    break
     except Exception as e:
         logger.error(f"Fehler beim Aktualisieren von SimplyPrint Filament {uid}: {e}")
 
