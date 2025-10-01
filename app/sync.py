@@ -157,11 +157,12 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         else:
             length_used_percent = 0
 
-        # SimplyPrint API: "length_used" ist semantisch falsch - es bedeutet "length_LEFT" (verbleibend)!
-        # Quelle: Discord @Javad "it's inverted, we use length_used as a length_left"
+        # SimplyPrint API: Sende sowohl absolute Werte (left in mm) als auch Prozent (length_used)
+        # Quelle: Discord @Javad "length_used is inverted, it's length_left"
         payload = {
+            "left": int(remaining_length),  # Verbleibende Länge in mm (absolut)
             "length_used": length_used_percent,  # Prozent VERBLEIBEND (nicht verbraucht!)
-            "left_length_type": "percent",  # WICHTIG: Muss mit length_used gesendet werden
+            "left_length_type": "percent",  # Typ für length_used
             "color_name": sp_filament.get("colorName", ""),
             "color_hex": sp_filament.get("colorHex", "#FFFFFF"),
             "width": float(sp_filament.get("dia", 1.75)),
