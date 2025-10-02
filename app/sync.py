@@ -764,6 +764,14 @@ async def calculate_and_sync_usage(
                     if sp_filament:
                         await update_simplyprint_usage(spc, filament_data["uid"], remaining_weight, sp_filament, initial_weight)
                         logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_weight:.0f}g verbleibend ({initial_weight}g initial)")
+
+                        # Update DB mit Spoolman-Wert (bidirektionaler Sync)
+                        with get_session() as db:
+                            db.execute(
+                                "UPDATE spool SET used_weight_g = ?, archived = ?, updated_at = ? WHERE lot_nr = ?",
+                                (cur_used, int(bool(sm_spool.get("archived", False))), datetime.now(timezone.utc).isoformat(), filament_data['uid'])
+                            )
+                            logger.debug(f"DB aktualisiert (bidirektional) für lot_nr={filament_data['uid']}: used_weight={cur_used}g")
                     else:
                         logger.warning(f"Kann SimplyPrint nicht aktualisieren - sp_filament fehlt für {filament_data['uid']}")
                 else:
@@ -816,6 +824,14 @@ async def calculate_and_sync_usage(
 
         await smc.update_spool(sm_spool.get("id"), update_payload)
         logger.info(f"Verbrauch aktualisiert für lot_nr={filament_data['uid']}: {cur_used}g → {used_g}g")
+
+        # Update DB mit neuem used_weight und archived Status
+        with get_session() as db:
+            db.execute(
+                "UPDATE spool SET used_weight_g = ?, archived = ?, updated_at = ? WHERE lot_nr = ?",
+                (used_g, int(bool(sm_spool.get("archived", False))), datetime.now(timezone.utc).isoformat(), filament_data['uid'])
+            )
+            logger.debug(f"DB aktualisiert für lot_nr={filament_data['uid']}: used_weight={used_g}g, archived={sm_spool.get('archived', False)}")
 
     except Exception as e:
         logger.error(f"Fehler beim Update von used_weight für lot_nr={filament_data['uid']}: {e}")
