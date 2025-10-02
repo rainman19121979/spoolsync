@@ -768,13 +768,7 @@ async def calculate_and_sync_usage(
                         await update_simplyprint_usage(spc, filament_data["uid"], remaining_weight, sp_filament, initial_weight)
                         logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_weight:.0f}g verbleibend ({initial_weight}g initial)")
 
-                        # Update DB mit Spoolman-Wert (bidirektionaler Sync)
-                        with get_session() as db:
-                            db.execute(
-                                "UPDATE spool SET used_weight_g = ?, archived = ?, updated_at = ? WHERE lot_nr = ?",
-                                (cur_used, int(bool(sm_spool.get("archived", False))), datetime.now(timezone.utc).isoformat(), filament_data['uid'])
-                            )
-                            logger.debug(f"DB aktualisiert (bidirektional) für lot_nr={filament_data['uid']}: used_weight={cur_used}g")
+                        # DB-Update wird in der aufrufenden Funktion gemacht (verhindert DB-Locks)
                     else:
                         logger.warning(f"Kann SimplyPrint nicht aktualisieren - sp_filament fehlt für {filament_data['uid']}")
                 else:
@@ -830,13 +824,7 @@ async def calculate_and_sync_usage(
         await smc.update_spool(sm_spool.get("id"), update_payload)
         logger.info(f"Verbrauch aktualisiert für lot_nr={filament_data['uid']}: {cur_used}g → {used_g}g")
 
-        # Update DB mit neuem used_weight und archived Status
-        with get_session() as db:
-            db.execute(
-                "UPDATE spool SET used_weight_g = ?, archived = ?, updated_at = ? WHERE lot_nr = ?",
-                (used_g, int(bool(sm_spool.get("archived", False))), datetime.now(timezone.utc).isoformat(), filament_data['uid'])
-            )
-            logger.debug(f"DB aktualisiert für lot_nr={filament_data['uid']}: used_weight={used_g}g, archived={sm_spool.get('archived', False)}")
+        # DB-Update wird in der aufrufenden Funktion gemacht (verhindert DB-Locks)
 
     except Exception as e:
         logger.error(f"Fehler beim Update von used_weight für lot_nr={filament_data['uid']}: {e}")
@@ -1007,16 +995,20 @@ async def run_sync_once():
     # UIDs die in SimplyPrint vorhanden sind
     sp_uids = {sp_fil.get("uid") for sp_fil in sp_filaments if isinstance(sp_fil, dict) and sp_fil.get("uid")}
 
-    with get_session() as session:
-        for sp_filament in sp_filaments:
-            if not isinstance(sp_filament, dict):
-                logger.warning(f"Überspringe ungültigen Eintrag: {type(sp_filament)}")
-                continue
+    # WICHTIG: DB-Connection NICHT während async API-Calls offen halten!
+    # Sonst: "database is locked" Fehler
+    for sp_filament in sp_filaments:
+        if not isinstance(sp_filament, dict):
+            logger.warning(f"Überspringe ungültigen Eintrag: {type(sp_filament)}")
+            continue
 
+        # Öffne DB-Connection NUR für dieses eine Filament
+        with get_session() as session:
             if await sync_single_filament(smc, spc, sp_filament, lot_map, sm_filaments, sm_vendors, session, sp_types, last_sync_time):
                 success_count += 1
             else:
                 error_count += 1
+        # DB-Connection wird hier automatisch geschlossen
 
     # 3) Spulen in Spoolman verwalten, die nicht mehr in SimplyPrint existieren
     await cleanup_deleted_spools(smc, lot_map, sp_uids)
