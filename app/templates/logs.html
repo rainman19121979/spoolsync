@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>SpoolSync Logs</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --primary: #6366f1;
+      --primary-dark: #4f46e5;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --info: #3b82f6;
+      --bg-dark: #0f172a;
+      --bg-light: #f8fafc;
+      --card-bg: #ffffff;
+      --text-primary: #0f172a;
+      --text-secondary: #64748b;
+      --border: #e2e8f0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-light);
+      color: var(--text-primary);
+      line-height: 1.6;
+    }
+
+    .navbar {
+      background: var(--card-bg);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .navbar-content {
+      max-width: 1600px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
+
+    .nav-links {
+      display: flex;
+      gap: 1.5rem;
+      align-items: center;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+
+    .nav-links a:hover, .nav-links a.active {
+      color: var(--primary);
+    }
+
+    .container {
+      max-width: 1600px;
+      margin: 2rem auto;
+      padding: 0 2rem;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 0.5rem 1rem;
+      border: none;
+      border-radius: 0.5rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-dark);
+    }
+
+    .btn-secondary {
+      background: var(--bg-light);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+    }
+
+    .btn-secondary:hover {
+      background: #e2e8f0;
+    }
+
+    .filter-group {
+      display: flex;
+      gap: 0.5rem;
+      background: var(--card-bg);
+      padding: 0.25rem;
+      border-radius: 0.5rem;
+      border: 1px solid var(--border);
+    }
+
+    .filter-btn {
+      padding: 0.375rem 0.75rem;
+      border: none;
+      background: transparent;
+      border-radius: 0.375rem;
+      cursor: pointer;
+      font-size: 0.875rem;
+      transition: all 0.2s;
+    }
+
+    .filter-btn.active {
+      background: var(--primary);
+      color: white;
+    }
+
+    .status-card {
+      background: var(--card-bg);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      margin-bottom: 1.5rem;
+    }
+
+    .status-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .status-item {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .status-label {
+      font-size: 0.875rem;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    .status-value {
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+
+    .status-running {
+      color: var(--warning);
+    }
+
+    .status-success {
+      color: var(--success);
+    }
+
+    .status-error {
+      color: var(--danger);
+    }
+
+    .log-container {
+      background: var(--bg-dark);
+      border-radius: 1rem;
+      padding: 1.5rem;
+      height: 600px;
+      overflow-y: auto;
+      font-family: 'Fira Code', 'Courier New', monospace;
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+
+    .log-entry {
+      padding: 0.5rem 0;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+    }
+
+    .log-entry:last-child {
+      border-bottom: none;
+    }
+
+    .log-timestamp {
+      color: #64748b;
+      margin-right: 1rem;
+    }
+
+    .log-level {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      border-radius: 0.25rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      margin-right: 0.5rem;
+    }
+
+    .log-level-error {
+      background: var(--danger);
+      color: white;
+    }
+
+    .log-level-warning {
+      background: var(--warning);
+      color: white;
+    }
+
+    .log-level-info {
+      background: var(--info);
+      color: white;
+    }
+
+    .log-level-debug {
+      background: var(--text-secondary);
+      color: white;
+    }
+
+    .log-message {
+      color: #e2e8f0;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    .badge-success {
+      background: #d1fae5;
+      color: var(--success);
+    }
+
+    .badge-warning {
+      background: #fef3c7;
+      color: #d97706;
+    }
+
+    .badge-danger {
+      background: #fee2e2;
+      color: var(--danger);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .loading {
+      animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar">
+    <div class="navbar-content">
+      <div class="logo">SpoolSync</div>
+      <div class="nav-links">
+        <a href="/">Dashboard</a>
+        <a href="/logs" class="active">Logs</a>
+        <a href="/settings">Settings</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container">
+    <div class="header">
+      <h1>System Logs</h1>
+      <div class="controls">
+        <div class="filter-group">
+          <button class="filter-btn active" data-level="all">Alle</button>
+          <button class="filter-btn" data-level="error">Errors</button>
+          <button class="filter-btn" data-level="warning">Warnings</button>
+          <button class="filter-btn" data-level="info">Info</button>
+          <button class="filter-btn" data-level="debug">Debug</button>
+        </div>
+        <button class="btn btn-secondary" onclick="clearLogs()">Clear</button>
+        <button class="btn btn-primary" onclick="refreshLogs()">Refresh</button>
+        <button class="btn btn-secondary" id="liveToggle" onclick="toggleLive()">Live: OFF</button>
+      </div>
+    </div>
+
+    <!-- Status Card -->
+    <div class="status-card">
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-label">Status</div>
+          <div class="status-value" id="syncStatus">
+            <span class="loading">Lädt...</span>
+          </div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Aktueller Schritt</div>
+          <div class="status-value" id="currentStep">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Letzter Erfolg</div>
+          <div class="status-value" id="lastSuccess">—</div>
+        </div>
+        <div class="status-item">
+          <div class="status-label">Nächster Sync</div>
+          <div class="status-value" id="nextRun">—</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Logs -->
+    <div class="log-container" id="logContainer">
+      <div style="color: #64748b;">Logs werden geladen...</div>
+    </div>
+  </div>
+
+  <script>
+    let currentLevel = 'all';
+    let liveMode = false;
+    let eventSource = null;
+
+    // Filter Buttons
+    document.querySelectorAll('.filter-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentLevel = btn.dataset.level;
+        refreshLogs();
+      });
+    });
+
+    // Load Status
+    async function loadStatus() {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+
+        const statusEl = document.getElementById('syncStatus');
+        const stepEl = document.getElementById('currentStep');
+        const successEl = document.getElementById('lastSuccess');
+        const nextEl = document.getElementById('nextRun');
+
+        if (data.is_running) {
+          statusEl.innerHTML = '<span class="status-running">Läuft...</span>';
+        } else if (data.last_error) {
+          statusEl.innerHTML = '<span class="status-error">Fehler</span>';
+        } else {
+          statusEl.innerHTML = '<span class="status-success">OK</span>';
+        }
+
+        stepEl.textContent = data.current_step || '—';
+        successEl.textContent = data.last_success ? new Date(data.last_success).toLocaleString('de-DE') : '—';
+        nextEl.textContent = data.next_run ? new Date(data.next_run).toLocaleString('de-DE') : '—';
+      } catch (e) {
+        console.error('Status load error:', e);
+      }
+    }
+
+    // Load Logs
+    async function refreshLogs() {
+      try {
+        const res = await fetch(`/api/logs?lines=200&level=${currentLevel}`);
+        const data = await res.json();
+
+        const container = document.getElementById('logContainer');
+        if (data.logs.length === 0) {
+          container.innerHTML = '<div style="color: #64748b;">Keine Logs gefunden</div>';
+          return;
+        }
+
+        container.innerHTML = data.logs.map(log => {
+          const levelClass = `log-level log-level-${log.level}`;
+          return `
+            <div class="log-entry">
+              <span class="log-timestamp">${log.timestamp}</span>
+              <span class="${levelClass}">${log.level.toUpperCase()}</span>
+              <span class="log-message">${escapeHtml(log.message)}</span>
+            </div>
+          `;
+        }).join('');
+
+        // Auto-scroll to bottom
+        container.scrollTop = container.scrollHeight;
+      } catch (e) {
+        console.error('Log load error:', e);
+      }
+    }
+
+    // Clear Logs Display
+    function clearLogs() {
+      document.getElementById('logContainer').innerHTML = '<div style="color: #64748b;">Logs gelöscht (nur Anzeige)</div>';
+    }
+
+    // Toggle Live Mode
+    function toggleLive() {
+      liveMode = !liveMode;
+      const btn = document.getElementById('liveToggle');
+
+      if (liveMode) {
+        btn.textContent = 'Live: ON';
+        btn.classList.remove('btn-secondary');
+        btn.classList.add('btn-primary');
+        startLiveStream();
+      } else {
+        btn.textContent = 'Live: OFF';
+        btn.classList.remove('btn-primary');
+        btn.classList.add('btn-secondary');
+        stopLiveStream();
+      }
+    }
+
+    // Start SSE Stream
+    function startLiveStream() {
+      if (eventSource) return;
+
+      eventSource = new EventSource('/api/logs/stream');
+      const container = document.getElementById('logContainer');
+
+      eventSource.onmessage = (event) => {
+        try {
+          const log = JSON.parse(event.data);
+          const levelClass = `log-level log-level-${log.level}`;
+          const entry = document.createElement('div');
+          entry.className = 'log-entry';
+          entry.innerHTML = `
+            <span class="log-timestamp">${new Date().toLocaleTimeString('de-DE')}</span>
+            <span class="${levelClass}">${log.level.toUpperCase()}</span>
+            <span class="log-message">${escapeHtml(log.message)}</span>
+          `;
+          container.appendChild(entry);
+          container.scrollTop = container.scrollHeight;
+        } catch (e) {
+          // Heartbeat or parse error
+        }
+      };
+
+      eventSource.onerror = () => {
+        console.error('SSE connection lost');
+        stopLiveStream();
+        toggleLive(); // Turn off live mode
+      };
+    }
+
+    // Stop SSE Stream
+    function stopLiveStream() {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+    }
+
+    // HTML Escape
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // Init
+    loadStatus();
+    refreshLogs();
+    setInterval(loadStatus, 3000); // Update status every 3s
+  </script>
+</body>
+</html>

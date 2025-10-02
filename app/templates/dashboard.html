@@ -400,6 +400,9 @@
         <span>SpoolSync</span>
       </div>
       <div class="nav-actions">
+        <a class="btn btn-outline" href="/logs">
+          <span>📋</span> Logs
+        </a>
         <button class="btn btn-success" onclick="manualSync()" id="syncBtn">
           <span>🔄</span> Synchronisieren
         </button>
@@ -477,6 +480,33 @@
           {% endif %}
         </div>
         <div class="stat-subtext" id="lastSyncSubtext">{% if stats.last_sync == "0" %}Führe ersten Sync aus{% endif %}</div>
+      </div>
+    </div>
+
+    <!-- Sync Status Card -->
+    <div class="stat-card" style="margin-bottom: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <div>
+          <div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem;">Sync Status</div>
+          <div style="font-size: 1.5rem; font-weight: 600;" id="syncStatusText">Lädt...</div>
+        </div>
+        <button onclick="manualSync()" class="btn" style="background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);">
+          Sync starten
+        </button>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; font-size: 0.875rem;">
+        <div>
+          <div style="opacity: 0.8;">Aktueller Schritt</div>
+          <div style="font-weight: 500; margin-top: 0.25rem;" id="currentStep">—</div>
+        </div>
+        <div>
+          <div style="opacity: 0.8;">Nächster Sync</div>
+          <div style="font-weight: 500; margin-top: 0.25rem;" id="nextRun">—</div>
+        </div>
+        <div>
+          <div style="opacity: 0.8;">Stats</div>
+          <div style="font-weight: 500; margin-top: 0.25rem;" id="syncStats">—</div>
+        </div>
       </div>
     </div>
 
@@ -622,6 +652,51 @@
         btn.innerHTML = '<span>🔄</span> Synchronisieren';
       }
     }
+
+    // Load Sync Status
+    async function loadSyncStatus() {
+      try {
+        const res = await fetch('/status');
+        const data = await res.json();
+
+        const statusEl = document.getElementById('syncStatusText');
+        const stepEl = document.getElementById('currentStep');
+        const nextEl = document.getElementById('nextRun');
+        const statsEl = document.getElementById('syncStats');
+
+        if (data.is_running) {
+          statusEl.textContent = '🔄 Läuft...';
+        } else if (data.last_error) {
+          statusEl.textContent = '❌ Fehler: ' + data.last_error;
+        } else {
+          statusEl.textContent = '✅ Bereit';
+        }
+
+        stepEl.textContent = data.current_step || '—';
+        nextEl.textContent = data.next_run ? new Date(data.next_run).toLocaleTimeString('de-DE') : '—';
+
+        if (data.stats) {
+          const s = data.stats;
+          statsEl.textContent = `✓${s.synced} ✚${s.created} ↻${s.updated}`;
+        }
+      } catch (e) {
+        console.error('Status load error:', e);
+      }
+    }
+
+    // Manual Sync
+    async function manualSync() {
+      try {
+        await fetch('/sync', { method: 'POST' });
+        setTimeout(loadSyncStatus, 500);
+      } catch (e) {
+        alert('Sync fehlgeschlagen: ' + e.message);
+      }
+    }
+
+    // Init and periodic refresh
+    loadSyncStatus();
+    setInterval(loadSyncStatus, 3000); // Update every 3 seconds
   </script>
 </body>
 </html>

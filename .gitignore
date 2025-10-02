@@ -28,14 +28,31 @@ ENV/
 # Database
 *.db
 *.db-journal
+*.sqlite
+*.sqlite3
 
 # Logs
 *.log
+*.err
+app.log
+app.err
 
 # Environment
 .env
 .env.local
+secrets.json
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Test/Temp files
+temp/
+tmp/
+test_*.py
+*.test

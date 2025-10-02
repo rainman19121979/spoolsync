@@ -1,11 +1,14 @@
 import os, datetime as dt
+import json
 from fastapi import FastAPI, Request, Form, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import asyncio
+from pathlib import Path
 
 from .db import init_db, get_session
 from .web import templates
-from .sync import start_scheduler, reconfigure_scheduler, run_sync_once
+from .sync import start_scheduler, reconfigure_scheduler, run_sync_once, sync_status
 from . import settings as S
 from .clients import SpoolmanClient, SimplyPrintClient
 
@@ -189,3 +192,156 @@ async def sync_now():
 def favicon():
     # verhindert 500/404 Spam bei Browser-Icon-Anfragen
     return Response(status_code=204)
+
+
+@app.get("/status")
+async def get_status():
+    """Gibt aktuellen Sync-Status zurück."""
+    return sync_status.get_status()
+
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_view(request: Request):
+    """Zeigt Log-Viewer Seite."""
+    return templates.TemplateResponse("logs.html", {"request": request})
+
+
+@app.get("/api/logs")
+async def get_logs(lines: int = 200, level: str = "all"):
+    """
+    Holt die letzten N Zeilen aus den Log-Dateien.
+
+    Args:
+        lines: Anzahl Zeilen (default: 200)
+        level: Filter (all, error, warning, info, debug)
+    """
+    log_entries = []
+
+    # Log-Dateien (Reihenfolge: erst app.err, dann app.log)
+    log_files = [
+        Path("/var/log/spoolsync/app.err"),
+        Path("/var/log/spoolsync/app.log"),
+    ]
+
+    # Fallback für Development (wenn /var/log nicht existiert)
+    if not log_files[0].exists():
+        log_files = [
+            Path("app.err"),
+            Path("app.log"),
+        ]
+
+    for log_file in log_files:
+        if not log_file.exists():
+            continue
+
+        try:
+            # Lese letzte N Zeilen
+            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                file_lines = f.readlines()
+
+            # Nimm die letzten 'lines' Zeilen
+            recent_lines = file_lines[-lines:] if len(file_lines) > lines else file_lines
+
+            for line in recent_lines:
+                line = line.strip()
+                if not line:
+                    continue
+
+                # Parse Log-Level
+                log_level = "info"
+                if " - ERROR - " in line or "ERROR:" in line:
+                    log_level = "error"
+                elif " - WARNING - " in line or "WARNING:" in line:
+                    log_level = "warning"
+                elif " - DEBUG - " in line or "DEBUG:" in line:
+                    log_level = "debug"
+
+                # Filter nach Level
+                if level != "all" and log_level != level.lower():
+                    continue
+
+                log_entries.append({
+                    "timestamp": line.split(" - ")[0] if " - " in line else "",
+                    "level": log_level,
+                    "message": line,
+                })
+        except Exception as e:
+            log_entries.append({
+                "timestamp": dt.datetime.now().isoformat(),
+                "level": "error",
+                "message": f"Fehler beim Lesen von {log_file}: {str(e)}",
+            })
+
+    # Sortiere nach Timestamp (neueste zuerst)
+    log_entries.reverse()
+
+    return {
+        "logs": log_entries[:lines],
+        "total": len(log_entries),
+    }
+
+
+@app.get("/api/logs/stream")
+async def stream_logs(request: Request):
+    """
+    Server-Sent Events für Live-Log-Updates.
+    """
+    async def event_generator():
+        log_file = Path("/var/log/spoolsync/app.err")
+
+        # Fallback für Development
+        if not log_file.exists():
+            log_file = Path("app.log")
+
+        # Starte am Ende der Datei
+        if log_file.exists():
+            with open(log_file, "r") as f:
+                f.seek(0, 2)  # Gehe zum Ende
+                position = f.tell()
+        else:
+            position = 0
+
+        while True:
+            # Check ob Client noch verbunden ist
+            if await request.is_disconnected():
+                break
+
+            try:
+                if log_file.exists():
+                    with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                        f.seek(position)
+                        new_lines = f.readlines()
+                        position = f.tell()
+
+                        for line in new_lines:
+                            line = line.strip()
+                            if line:
+                                # Parse Log-Level
+                                log_level = "info"
+                                if " - ERROR - " in line:
+                                    log_level = "error"
+                                elif " - WARNING - " in line:
+                                    log_level = "warning"
+                                elif " - DEBUG - " in line:
+                                    log_level = "debug"
+
+                                data = json.dumps({"level": log_level, "message": line})
+                                yield f"data: {data}\n\n"
+
+                # Sende Heartbeat alle 15 Sekunden
+                yield f": heartbeat\n\n"
+
+            except Exception as e:
+                data = json.dumps({"level": "error", "message": f"Stream error: {str(e)}"})
+                yield f"data: {data}\n\n"
+
+            await asyncio.sleep(2)  # Check alle 2 Sekunden
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )

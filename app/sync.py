@@ -15,6 +15,68 @@ logger = logging.getLogger(__name__)
 _scheduler = None
 
 
+class SyncStatus:
+    """Globaler Sync-Status für Live-Updates im Web-Interface."""
+    def __init__(self):
+        self.is_running = False
+        self.last_run = None
+        self.last_success = None
+        self.last_error = None
+        self.current_step = ""
+        self.stats = {
+            "synced": 0,
+            "created": 0,
+            "updated": 0,
+            "archived": 0,
+            "errors": 0,
+        }
+
+    def start(self):
+        self.is_running = True
+        self.last_run = datetime.now(timezone.utc).isoformat()
+        self.current_step = "Initialisierung..."
+        self.stats = {"synced": 0, "created": 0, "updated": 0, "archived": 0, "errors": 0}
+
+    def stop(self, success: bool = True, error: str = None):
+        self.is_running = False
+        self.current_step = ""
+        if success:
+            self.last_success = datetime.now(timezone.utc).isoformat()
+        if error:
+            self.last_error = error
+
+    def set_step(self, step: str):
+        self.current_step = step
+
+    def increment(self, key: str):
+        if key in self.stats:
+            self.stats[key] += 1
+
+    def get_status(self):
+        return {
+            "is_running": self.is_running,
+            "last_run": self.last_run,
+            "last_success": self.last_success,
+            "last_error": self.last_error,
+            "current_step": self.current_step,
+            "stats": self.stats,
+            "next_run": self._get_next_run(),
+        }
+
+    def _get_next_run(self):
+        """Berechnet nächsten geplanten Sync."""
+        if _scheduler and _scheduler.running:
+            jobs = _scheduler.get_jobs()
+            if jobs:
+                next_run = jobs[0].next_run_time
+                if next_run:
+                    return next_run.isoformat()
+        return None
+
+
+sync_status = SyncStatus()
+
+
 def EPS() -> float:
     """Epsilon-Schwellenwert für Gewichtsvergleiche."""
     return float(S.get("EPSILON_GRAMS", "0.5"))
@@ -147,26 +209,36 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         # SimplyPrint Create/Update Endpoint benötigt ALLE Felder, nicht nur "left"
         # Wir müssen das existierende Filament mit dem neuen "left" Wert überschreiben
 
-        # Berechne Prozent verbleibend (laut Discord: length_used ist semantisch vertauscht)
-        total_length = int(sp_filament.get("total", 0))
-        remaining_length = max(0, int(remaining_length_mm))
+        # WICHTIG: total_length + total_length_type sind ERFORDERLICH (Browser-Request Analyse)
+        # SimplyPrint erwartet Gewicht in Gramm + Prozent basierend auf Gewicht
 
-        # length_used als Prozent verbleibend (nicht verbraucht!)
-        if total_length > 0:
-            length_used_percent = round((remaining_length / total_length) * 100, 2)
+        density = float(sp_filament.get("density", 1.24))
+        diameter = float(sp_filament.get("dia", 1.75))
+
+        # Hole total_length in MM aus SimplyPrint
+        total_length_mm = int(sp_filament.get("total", 0))
+        remaining_length_mm = max(0, int(remaining_length_mm))
+
+        # Konvertiere zu Gewicht in Gramm (für total_length im Payload)
+        total_weight_g = calculate_weight_from_length(total_length_mm, density, diameter)
+        remaining_weight_g = calculate_weight_from_length(remaining_length_mm, density, diameter)
+
+        # Berechne Prozent verbleibend basierend auf GEWICHT (konsistent mit total_length_type: "g")
+        # length_used ist semantisch "length_left" (Discord @Javad) = Prozent verbleibend
+        if total_weight_g > 0:
+            length_used_percent = round((remaining_weight_g / total_weight_g) * 100, 2)
         else:
             length_used_percent = 0
 
-        # SimplyPrint API: Sende sowohl absolute Werte (left in mm) als auch Prozent (length_used)
-        # Quelle: Discord @Javad "length_used is inverted, it's length_left"
         payload = {
-            "left": int(remaining_length),  # Verbleibende Länge in mm (absolut)
+            "total_length": int(total_weight_g),  # Gesamtgewicht in Gramm!
+            "total_length_type": "g",  # Einheit: Gramm (NICHT "kg" oder "mm"!)
             "length_used": length_used_percent,  # Prozent VERBLEIBEND (nicht verbraucht!)
             "left_length_type": "percent",  # Typ für length_used
             "color_name": sp_filament.get("colorName", ""),
             "color_hex": sp_filament.get("colorHex", "#FFFFFF"),
-            "width": float(sp_filament.get("dia", 1.75)),
-            "density": float(sp_filament.get("density", 1.24)),
+            "width": diameter,
+            "density": density,
             "brand": sp_filament.get("brand", ""),
         }
 
@@ -795,6 +867,9 @@ async def run_sync_once():
     # Timestamp vor dem Sync speichern
     sync_start_time = time.time()
 
+    # Status aktualisieren
+    sync_status.start()
+
     logger.info("=== Sync gestartet ===")
 
     spc = SimplyPrintClient()
@@ -808,11 +883,15 @@ async def run_sync_once():
 
     # 1) Daten von beiden APIs laden
     try:
+        sync_status.set_step("Lade Daten von SimplyPrint...")
         sp_resp = await spc.list_filaments()
+
+        sync_status.set_step("Lade Daten von Spoolman...")
         sm_spools = await smc.list_spools()
         sm_filaments = await smc.list_filaments()
         sm_vendors_list = await smc.list_vendors()
 
+        sync_status.set_step("Lade Filament-Types...")
         # Filament-Types von SimplyPrint laden für bessere Material-Daten
         sp_types_resp = await spc.get_filament_types()
 
@@ -830,6 +909,7 @@ async def run_sync_once():
 
     except Exception as e:
         logger.error(f"Fehler beim Laden der Daten: {e}", exc_info=True)
+        sync_status.stop(success=False, error=str(e))
         return
 
     # SimplyPrint Response normalisieren
@@ -903,6 +983,9 @@ async def run_sync_once():
     S.set("LAST_SYNC_TIME", str(sync_start_time))
 
     logger.info(f"=== Sync abgeschlossen: {success_count} erfolgreich, {error_count} Fehler ===")
+
+    # Status aktualisieren
+    sync_status.stop(success=error_count == 0, error=f"{error_count} Fehler" if error_count > 0 else None)
 
 
 async def cleanup_deleted_spools(
