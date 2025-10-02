@@ -716,6 +716,9 @@ async def calculate_and_sync_usage(
     used_g = round((length_used_mm / 1000.0) * gpm, 2)
     cur_used = float(sm_spool.get("used_weight") or 0)
 
+    # Debug: Zeige Berechnungsgrundlage
+    logger.debug(f"Verbrauchsberechnung für {filament_data['uid']}: total={total}mm, left={left}mm, used={length_used_mm}mm → {used_g}g (SimplyPrint), Spoolman aktuell: {cur_used}g")
+
     # Bidirektionale Synchronisation: Spoolman → SimplyPrint
     #
     # Wenn Spoolman nach dem letzten Sync aktualisiert wurde (manuelle Änderung/Waage),
@@ -777,7 +780,9 @@ async def calculate_and_sync_usage(
                 else:
                     logger.info(f"[DRY-RUN] Würde SimplyPrint aktualisieren: {remaining_weight:.0f}g verbleibend ({initial_weight}g initial)")
 
-                # Spoolman-Wert beibehalten - beim nächsten Sync sollten beide Systeme synchron sein
+                # WICHTIG: Spoolman-Wert beibehalten und NICHT überschreiben!
+                # Normaler Sync-Code wird übersprungen durch return
+                logger.info(f"Bidirektionaler Sync abgeschlossen: Spoolman-Wert ({cur_used}g) bleibt erhalten")
                 return cur_used
 
         except Exception as e:
