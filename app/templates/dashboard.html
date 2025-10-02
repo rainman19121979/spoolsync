@@ -403,9 +403,6 @@
         <a class="btn btn-outline" href="/logs">
           <span>📋</span> Logs
         </a>
-        <button class="btn btn-success" onclick="manualSync()" id="syncBtn">
-          <span>🔄</span> Synchronisieren
-        </button>
         <a class="btn btn-outline" href="/health" target="_blank">
           <span>📊</span> Health
         </a>
@@ -617,42 +614,6 @@
   </div>
 
   <script>
-    async function manualSync() {
-      const btn = document.getElementById('syncBtn');
-      const status = document.getElementById('syncStatus');
-
-      btn.disabled = true;
-      btn.innerHTML = '<span>⏳</span> Synchronisiere...';
-      status.className = 'alert loading';
-      status.textContent = '🔄 Synchronisierung läuft...';
-
-      try {
-        const response = await fetch('/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        const data = await response.json();
-
-        if (data.ok) {
-          status.className = 'alert success';
-          status.innerHTML = '✓ Synchronisierung erfolgreich abgeschlossen!<br><small>Zeitpunkt: ' + new Date(data.ts).toLocaleString('de-DE') + '</small>';
-
-          setTimeout(() => {
-            window.location.reload();
-          }, 1500);
-        } else {
-          throw new Error('Sync fehlgeschlagen');
-        }
-      } catch (error) {
-        status.className = 'alert error';
-        status.textContent = '✗ Fehler: ' + error.message;
-      } finally {
-        btn.disabled = false;
-        btn.innerHTML = '<span>🔄</span> Synchronisieren';
-      }
-    }
-
     // Load Sync Status
     async function loadSyncStatus() {
       try {
@@ -686,11 +647,35 @@
 
     // Manual Sync
     async function manualSync() {
+      const statusEl = document.getElementById('syncStatusText');
+      const status = document.getElementById('syncStatus');
+
       try {
+        statusEl.textContent = '⏳ Starte Sync...';
+        if (status) {
+          status.className = 'alert loading';
+          status.textContent = '🔄 Synchronisierung läuft...';
+        }
+
         await fetch('/sync', { method: 'POST' });
-        setTimeout(loadSyncStatus, 500);
+
+        // Status wird durch loadSyncStatus aktualisiert
+        setTimeout(() => {
+          loadSyncStatus();
+          if (status) {
+            status.className = 'alert success';
+            status.innerHTML = '✓ Synchronisierung gestartet!';
+            setTimeout(() => { status.className = 'alert'; status.textContent = ''; }, 3000);
+          }
+        }, 500);
       } catch (e) {
-        alert('Sync fehlgeschlagen: ' + e.message);
+        statusEl.textContent = '❌ Fehler';
+        if (status) {
+          status.className = 'alert error';
+          status.textContent = '✗ Fehler: ' + e.message;
+        } else {
+          alert('Sync fehlgeschlagen: ' + e.message);
+        }
       }
     }
 
