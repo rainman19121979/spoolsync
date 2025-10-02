@@ -573,6 +573,8 @@ async def ensure_spoolman_spool(
     Wiederverwendet existierende Filamente, wenn Material, Durchmesser und Marke übereinstimmen.
     """
     if uid in lot_map:
+        # Spule existiert bereits - wird geupdated
+        sync_status.increment("updated")
         return lot_map[uid]
 
     if S.get("DRY_RUN", "false") == "true":
@@ -665,6 +667,7 @@ async def ensure_spoolman_spool(
             f"spool_weight={spool_weight_log}, "
             f"initial_weight={total_weight}g)"
         )
+        sync_status.increment("created")
         return sm_spool
 
     except Exception as e:
@@ -1006,8 +1009,10 @@ async def run_sync_once():
         with get_session() as session:
             if await sync_single_filament(smc, spc, sp_filament, lot_map, sm_filaments, sm_vendors, session, sp_types, last_sync_time):
                 success_count += 1
+                sync_status.increment("synced")
             else:
                 error_count += 1
+                sync_status.increment("errors")
         # DB-Connection wird hier automatisch geschlossen
 
     # 3) Spulen in Spoolman verwalten, die nicht mehr in SimplyPrint existieren
@@ -1074,6 +1079,7 @@ async def cleanup_deleted_spools(
                 logger.info(f"Spule archiviert: {spool_id} (lot_nr={lot_nr}, used_weight={used_weight}g)")
                 logger.debug(f"Spoolman Archive Response: {result}")
                 archived_count += 1
+                sync_status.increment("archived")
             else:
                 # Löschen wenn nie benutzt
                 await smc.delete_spool(spool_id)
