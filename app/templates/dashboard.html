@@ -363,6 +363,31 @@
       opacity: 0.5;
     }
 
+    .progress-bar {
+      height: 4px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-top: 1rem;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: white;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    @keyframes slideProgress {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(400%); }
+    }
+
+    .progress-bar-fill.indeterminate {
+      width: 25%;
+      animation: slideProgress 1.5s ease-in-out infinite;
+    }
+
     @media (max-width: 768px) {
       .container {
         padding: 1rem;
@@ -483,12 +508,12 @@
     <!-- Sync Status Card -->
     <div class="stat-card" style="margin-bottom: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-        <div>
+        <div style="flex: 1;">
           <div style="font-size: 0.875rem; opacity: 0.9; margin-bottom: 0.5rem;">Sync Status</div>
           <div style="font-size: 1.5rem; font-weight: 600;" id="syncStatusText">Lädt...</div>
         </div>
-        <button onclick="manualSync()" class="btn" style="background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);">
-          Sync starten
+        <button onclick="manualSync()" id="syncButton" class="btn" style="background: rgba(255,255,255,0.2); color: white; border: 1px solid rgba(255,255,255,0.3);">
+          🔄 Sync starten
         </button>
       </div>
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; font-size: 0.875rem;">
@@ -502,8 +527,11 @@
         </div>
         <div>
           <div style="opacity: 0.8;">Stats</div>
-          <div style="font-weight: 500; margin-top: 0.25rem;" id="syncStats">—</div>
+          <div style="font-weight: 500; margin-top: 0.25rem;" id="syncStats" title="✓ Synchronisiert | ✚ Erstellt | ↻ Aktualisiert | ⬇ Archiviert | ✗ Fehler">—</div>
         </div>
+      </div>
+      <div class="progress-bar" id="progressBar" style="display: none;">
+        <div class="progress-bar-fill indeterminate"></div>
       </div>
     </div>
 
@@ -624,13 +652,24 @@
         const stepEl = document.getElementById('currentStep');
         const nextEl = document.getElementById('nextRun');
         const statsEl = document.getElementById('syncStats');
+        const progressBar = document.getElementById('progressBar');
+        const syncButton = document.getElementById('syncButton');
 
         if (data.is_running) {
           statusEl.textContent = '🔄 Läuft...';
-        } else if (data.last_error) {
-          statusEl.textContent = '❌ Fehler: ' + data.last_error;
+          progressBar.style.display = 'block';
+          syncButton.disabled = true;
+          syncButton.style.opacity = '0.6';
         } else {
-          statusEl.textContent = '✅ Bereit';
+          progressBar.style.display = 'none';
+          syncButton.disabled = false;
+          syncButton.style.opacity = '1';
+
+          if (data.last_error) {
+            statusEl.textContent = '❌ Fehler: ' + data.last_error;
+          } else {
+            statusEl.textContent = '✅ Bereit';
+          }
         }
 
         stepEl.textContent = data.current_step || '—';
@@ -638,7 +677,7 @@
 
         if (data.stats) {
           const s = data.stats;
-          statsEl.textContent = `✓${s.synced} ✚${s.created} ↻${s.updated}`;
+          statsEl.textContent = `✓${s.synced} ✚${s.created} ↻${s.updated} ⬇${s.archived || 0} ✗${s.errors || 0}`;
         }
       } catch (e) {
         console.error('Status load error:', e);
