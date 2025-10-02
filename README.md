@@ -22,11 +22,12 @@
 - **Smart Weight Rounding**: 988g → 1000g, 1088g → 1100g (JAYO)
 - **Verbrauchsberechnung**: Automatisch aus Länge + Dichte
 
-### 📊 NFC-Waagen Support ⚠️ (in Entwicklung)
-- **Timestamp-basiert**: Erkennt manuelle Waagen-Messungen
+### 📊 NFC-Waagen Support ✅
+- **Timestamp-basiert**: Erkennt manuelle Waagen-Messungen automatisch
 - **Bidirektional**: Waagen-Updates werden zu SimplyPrint synchronisiert
-- **Automatische Priorät**: Neueste Messung gewinnt
-- **Status**: Noch nicht vollständig getestet
+- **Automatische Priorität**: Neueste Messung gewinnt (Spoolman oder SimplyPrint)
+- **Korrekte Prozentberechnung**: Verwendet `initial_weight` aus Spoolman
+- **Status**: ✅ Vollständig implementiert und getestet
 
 ### 🎨 Filament-Verwaltung
 - **Vendor-Management**: Automatische Erstellung fehlender Hersteller
@@ -42,6 +43,9 @@
 
 ### 🖥️ Modernes Web-Interface
 - **Dashboard**: Übersicht über alle Filamente und Spulen
+- **Live-Stats**: Echtzeit-Counter (✓synced ✚created ↻updated ⬇archived ✗errors)
+- **Progress-Bar**: Animierte Fortschrittsanzeige während Sync
+- **Live-Logs**: Server-Sent Events (SSE) für Echtzeit-Log-Streaming
 - **Statistiken**: Verbrauch, Anzahl, letzter Sync
 - **Karten-Layout**: Moderne visuelle Darstellung mit Farbvorschau
 - **Settings**: Intuitive Konfiguration mit Live-Test
@@ -151,17 +155,36 @@ Klicke auf **"Test starten"** um die Verbindung zu prüfen:
 - ⚖️ Gesamtverbrauch in Gramm
 - 🔄 Letzter Sync (relative Zeit: "5 Min", "2 Std")
 
+### Live-Sync-Status
+- **Aktueller Status**: ✅ Bereit / 🔄 Läuft / ❌ Fehler
+- **Progress-Bar**: Animierte Anzeige während Sync läuft
+- **Aktueller Schritt**: Was gerade synchronisiert wird
+- **Nächster Sync**: Countdown bis zum nächsten automatischen Sync
+- **Live-Stats** (mit Tooltip-Erklärungen):
+  - ✓ Synchronisiert - Erfolgreich synchronisierte Filamente
+  - ✚ Erstellt - Neu erstellte Spulen in Spoolman
+  - ↻ Aktualisiert - Aktualisierte existierende Spulen
+  - ⬇ Archiviert - Archivierte Spulen
+  - ✗ Fehler - Fehler während Synchronisierung
+
 ### Filamente-Ansicht
 - Große Farbvorschau (48×48px Kreis)
 - Material, Marke, Durchmesser, Dichte
 - Hex-Farbcode
-- Hover-Effekte
+- Hover-Effekte mit Border-Highlight
 
 ### Spulen-Ansicht
 - Lot-Nr. mit Filament-Name
 - Material, Marke, Farbe
 - Verbrauch und Spulengewicht
 - Status-Badges (Aktiv/Archiviert)
+- Hover-Effekte
+
+### Logs-Seite
+- **Live-Stream**: Server-Sent Events für Echtzeit-Updates
+- **Filter**: Nach Log-Level (Error, Warning, Info, Debug)
+- **Farbcodierung**: Fehler rot, Warnings gelb, etc.
+- **Auto-Scroll**: Automatisches Scrollen zu neuen Einträgen
 
 ---
 
@@ -210,13 +233,36 @@ sudo -u spoolsync .venv/bin/python -m app.sync
 ## 🆙 Update
 
 ```bash
-cd SpoolSync
-git pull
+# Ins Repository-Verzeichnis wechseln
+cd ~/SpoolSync
+
+# Neueste Änderungen holen
+git pull origin main
+
+# Service stoppen
 sudo systemctl stop spoolsync
-sudo -u spoolsync /opt/spoolsync/.venv/bin/pip install -r requirements.txt
-sudo cp -r app /opt/spoolsync/
+
+# Dependencies updaten (falls requirements.txt geändert)
+sudo -u spoolsync /opt/spoolsync/.venv/bin/pip install -r spoolsync/requirements.txt
+
+# Code kopieren
+sudo cp -r spoolsync/app /opt/spoolsync/
+
+# Service starten
 sudo systemctl start spoolsync
+
+# Status prüfen
+sudo systemctl status spoolsync
+
+# Erste Logs nach Update ansehen
+sudo journalctl -u spoolsync -n 50
 ```
+
+### ⚠️ Nach dem Update
+
+- Dashboard öffnen: `http://SERVER-IP:8080`
+- Stats überprüfen (sollten sich nach erstem Sync füllen)
+- Logs auf Fehler prüfen: `sudo journalctl -u spoolsync -f`
 
 ---
 
@@ -267,6 +313,23 @@ sudo ./scripts/backup-sqlite.sh
 - Logs prüfen: `sudo journalctl -u spoolsync -f`
 - Test-Button in Settings verwenden
 
+**Stats zeigen alle 0**
+- Service neu starten: `sudo systemctl restart spoolsync`
+- Nach erstem Sync sollten Stats erscheinen
+- Dashboard aktualisiert alle 3 Sekunden
+
+**Prozent-Anzeige >100% in SimplyPrint**
+- ✅ **Gefixt!** Verwendet jetzt `initial_weight` aus Spoolman
+- Bei alten Spulen: Einmal manuell in Spoolman Gewicht setzen
+
+**"Database is locked" Fehler**
+- ✅ **Gefixt!** DB-Connection wird pro Filament geöffnet/geschlossen
+- Sollte nicht mehr auftreten ab Commit 34b05f5
+
+**SimplyPrint Felder verschwinden (brand_id, etc.)**
+- ✅ **Gefixt!** Alle Felder werden jetzt übernommen
+- Update auf neueste Version
+
 **Material wird nicht erkannt**
 - Types API wird automatisch geladen
 - Material-Typ kommt aus `material_type_name`
@@ -288,7 +351,11 @@ sudo ./scripts/backup-sqlite.sh
 - **Spoolman**: https://github.com/Donkie/Spoolman
 - **SpoolSync Endpoints**:
   - `GET /` - Dashboard
+  - `GET /logs` - Live-Logs Viewer
   - `GET /settings` - Einstellungen
+  - `GET /status` - Sync-Status (JSON)
+  - `GET /api/logs` - Log-Einträge abrufen
+  - `GET /api/logs/stream` - Live-Log-Stream (SSE)
   - `POST /sync` - Manueller Sync
   - `POST /settings/test` - Verbindungstest
   - `GET /health` - Health Check
