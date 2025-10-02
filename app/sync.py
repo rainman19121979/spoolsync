@@ -190,14 +190,14 @@ def calculate_weight_from_length(
     return round((length_mm / 1000.0) * gpm, 2)
 
 
-async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp_filament: Dict[str, Any], initial_weight_g: float = None):
+async def update_simplyprint_usage(spc, uid: str, remaining_weight_g: float, sp_filament: Dict[str, Any], initial_weight_g: float = None):
     """
-    Aktualisiert die verbleibende Länge in SimplyPrint basierend auf Waagen-Messung.
+    Aktualisiert SimplyPrint basierend auf Spoolman Gewichts-Daten.
 
     Args:
         spc: SimplyPrintClient
         uid: 4-Zeichen Filament-Code
-        remaining_length_mm: Verbleibende Länge in Millimetern
+        remaining_weight_g: Verbleibendes Gewicht in Gramm (aus Spoolman)
         sp_filament: Das komplette SimplyPrint Filament-Dict für alle benötigten Felder
         initial_weight_g: Ursprüngliches Gesamtgewicht in Gramm (aus Spoolman initial_weight)
     """
@@ -216,9 +216,8 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         density = float(sp_filament.get("density", 1.24))
         diameter = float(sp_filament.get("dia", 1.75))
 
-        # Berechne verbleibendes Gewicht aus Länge
-        remaining_length_mm = max(0, int(remaining_length_mm))
-        remaining_weight_g = calculate_weight_from_length(remaining_length_mm, density, diameter)
+        # Verwende remaining_weight_g direkt aus Spoolman (keine Umrechnung!)
+        remaining_weight_g = max(0, float(remaining_weight_g))
 
         # Verwende initial_weight aus Spoolman (ursprüngliches Gesamtgewicht)
         # Fallback: Berechne aus total_length (falls initial_weight nicht übergeben)
@@ -237,26 +236,42 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
 
         logger.debug(f"Update Payload für {uid} (ID: {filament_id}): {remaining_weight_g}g / {total_weight_g}g = {length_used_percent}%")
 
+        # Debug: Zeige alle verfügbaren Felder in sp_filament
+        logger.debug(f"Verfügbare sp_filament Felder für {uid}: {list(sp_filament.keys())}")
+
+        # WICHTIG: Alle Felder aus dem Original-Filament übernehmen!
+        # SimplyPrint Create/Update erfordert ALLE Felder, sonst werden sie überschrieben
         payload = {
-            "total_length": int(total_weight_g),  # Gesamtgewicht in Gramm!
-            "total_length_type": "g",  # Einheit: Gramm (NICHT "kg" oder "mm"!)
-            "length_used": length_used_percent,  # Prozent VERBLEIBEND (nicht verbraucht!)
-            "left_length_type": "percent",  # Typ für length_used
             "color_name": sp_filament.get("colorName", ""),
             "color_hex": sp_filament.get("colorHex", "#FFFFFF"),
+            "color_standard": sp_filament.get("colorStandard"),
             "width": diameter,
-            "density": density,
+            "empty_spool_weight": sp_filament.get("spoolWeight") or sp_filament.get("empty_spool_weight"),
+            "bought_at": sp_filament.get("bought_at") or sp_filament.get("boughtAt"),
+            "cost": sp_filament.get("cost"),
+            "custom_note": sp_filament.get("customNote") or sp_filament.get("custom_note"),
+            "prod_id": sp_filament.get("prod_id") or sp_filament.get("prodId"),
             "brand": sp_filament.get("brand", ""),
+            "brand_id": sp_filament.get("brand_id") or sp_filament.get("brandId"),
+            "brand_filament_id": sp_filament.get("brand_filament_id") or sp_filament.get("brandFilamentId"),
+            "brand_color_id": sp_filament.get("brand_color_id") or sp_filament.get("brandColorId"),
+            "brand_variant_id": sp_filament.get("brand_variant_id") or sp_filament.get("brandVariantId"),
+            "save_cost_as_material_cost": sp_filament.get("save_cost_as_material_cost"),
+            "total_length_type": "g",  # Einheit: Gramm
+            "left_length_type": "percent",  # Format: Prozent
+            "total_length": int(total_weight_g),  # Gesamtgewicht in Gramm
+            "length_used": length_used_percent,  # Prozent verbleibend (0-100)
         }
 
         # Material Type - SimplyPrint braucht filament_type als INTEGER (Type ID)
         sp_type = sp_filament.get("type", {})
         if isinstance(sp_type, dict) and sp_type.get("id"):
             payload["filament_type"] = int(sp_type.get("id"))  # Type ID als Integer
+        elif sp_filament.get("filament_type"):
+            payload["filament_type"] = int(sp_filament.get("filament_type"))
         else:
-            # Fallback: Verwende eine Default Type ID oder None
-            logger.warning(f"Keine Type ID für {uid}, Update könnte fehlschlagen")
-            # Versuche trotzdem - SimplyPrint könnte einen Default haben
+            # Fallback: Verwende eine Default Type ID
+            logger.warning(f"Keine Type ID für {uid}, verwende Fallback")
             payload["filament_type"] = 1  # Fallback Type ID
 
         # Debug: Zeige kompletten Payload
@@ -733,7 +748,7 @@ async def calculate_and_sync_usage(
                     f"Spoolman={cur_used}g vs SimplyPrint={used_g}g - aktualisiere SimplyPrint"
                 )
 
-                # Berechne verbleibende Länge aus Spoolman used_weight zurück
+                # Berechne verbleibendes Gewicht aus Spoolman used_weight
                 initial_weight = sm_spool.get("initial_weight") or round_to_standard_weight(
                     calculate_weight_from_length(
                         filament_data["total_length_mm"],
@@ -743,17 +758,16 @@ async def calculate_and_sync_usage(
                     filament_data.get("brand", "")
                 )
                 remaining_weight = initial_weight - cur_used
-                remaining_length_mm = (remaining_weight / gpm) * 1000.0 if gpm > 0 else 0
 
-                # Aktualisiere SimplyPrint mit korrigiertem Wert
+                # Aktualisiere SimplyPrint mit korrigiertem Wert (direkt in Gramm!)
                 if S.get("DRY_RUN", "false") != "true":
                     if sp_filament:
-                        await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm, sp_filament, initial_weight)
-                        logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_length_mm:.0f}mm verbleibend")
+                        await update_simplyprint_usage(spc, filament_data["uid"], remaining_weight, sp_filament, initial_weight)
+                        logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_weight:.0f}g verbleibend ({initial_weight}g initial)")
                     else:
                         logger.warning(f"Kann SimplyPrint nicht aktualisieren - sp_filament fehlt für {filament_data['uid']}")
                 else:
-                    logger.info(f"[DRY-RUN] Würde SimplyPrint aktualisieren: {remaining_length_mm:.0f}mm verbleibend")
+                    logger.info(f"[DRY-RUN] Würde SimplyPrint aktualisieren: {remaining_weight:.0f}g verbleibend ({initial_weight}g initial)")
 
                 # Spoolman-Wert beibehalten - beim nächsten Sync sollten beide Systeme synchron sein
                 return cur_used
