@@ -190,7 +190,7 @@ def calculate_weight_from_length(
     return round((length_mm / 1000.0) * gpm, 2)
 
 
-async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp_filament: Dict[str, Any]):
+async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp_filament: Dict[str, Any], initial_weight_g: float = None):
     """
     Aktualisiert die verbleibende Länge in SimplyPrint basierend auf Waagen-Messung.
 
@@ -199,6 +199,7 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         uid: 4-Zeichen Filament-Code
         remaining_length_mm: Verbleibende Länge in Millimetern
         sp_filament: Das komplette SimplyPrint Filament-Dict für alle benötigten Felder
+        initial_weight_g: Ursprüngliches Gesamtgewicht in Gramm (aus Spoolman initial_weight)
     """
     try:
         # SimplyPrint Create/Update Endpoint benötigt die numerische ID, nicht die UID
@@ -215,13 +216,17 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
         density = float(sp_filament.get("density", 1.24))
         diameter = float(sp_filament.get("dia", 1.75))
 
-        # Hole total_length in MM aus SimplyPrint
-        total_length_mm = int(sp_filament.get("total", 0))
+        # Berechne verbleibendes Gewicht aus Länge
         remaining_length_mm = max(0, int(remaining_length_mm))
-
-        # Konvertiere zu Gewicht in Gramm (für total_length im Payload)
-        total_weight_g = calculate_weight_from_length(total_length_mm, density, diameter)
         remaining_weight_g = calculate_weight_from_length(remaining_length_mm, density, diameter)
+
+        # Verwende initial_weight aus Spoolman (ursprüngliches Gesamtgewicht)
+        # Fallback: Berechne aus total_length (falls initial_weight nicht übergeben)
+        if initial_weight_g:
+            total_weight_g = initial_weight_g
+        else:
+            total_length_mm = int(sp_filament.get("total", 0))
+            total_weight_g = calculate_weight_from_length(total_length_mm, density, diameter)
 
         # Berechne Prozent verbleibend basierend auf GEWICHT (konsistent mit total_length_type: "g")
         # length_used ist semantisch "length_left" (Discord @Javad) = Prozent verbleibend
@@ -229,6 +234,8 @@ async def update_simplyprint_usage(spc, uid: str, remaining_length_mm: float, sp
             length_used_percent = round((remaining_weight_g / total_weight_g) * 100, 2)
         else:
             length_used_percent = 0
+
+        logger.debug(f"Update Payload für {uid} (ID: {filament_id}): {remaining_weight_g}g / {total_weight_g}g = {length_used_percent}%")
 
         payload = {
             "total_length": int(total_weight_g),  # Gesamtgewicht in Gramm!
@@ -741,7 +748,7 @@ async def calculate_and_sync_usage(
                 # Aktualisiere SimplyPrint mit korrigiertem Wert
                 if S.get("DRY_RUN", "false") != "true":
                     if sp_filament:
-                        await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm, sp_filament)
+                        await update_simplyprint_usage(spc, filament_data["uid"], remaining_length_mm, sp_filament, initial_weight)
                         logger.info(f"SimplyPrint aktualisiert mit korrigiertem Wert: {remaining_length_mm:.0f}mm verbleibend")
                     else:
                         logger.warning(f"Kann SimplyPrint nicht aktualisieren - sp_filament fehlt für {filament_data['uid']}")
